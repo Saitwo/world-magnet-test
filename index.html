@@ -1,0 +1,826 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>world-magnet — 貼る快感の検証</title>
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="apple-touch-icon" href="./apple-touch-icon.png">
+<meta name="theme-color" content="#f2f3f2">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="magnet">
+<style>
+:root{
+  /* ---- ライブ調整（良い値が出たらここに焼き込む） ---- */
+  --drop-ms: 260;
+  --bounce: 0.5;
+  --shadow-strength: 0.3;
+  --shadow-blur: 10;
+  --thickness: 4;
+  --tilt: 2.5;
+  --mag-size: 46;        /* マグネットの直径 px */
+
+  --board: #f2f3f2;
+  --board-2: #e6e8e7;
+  --land: #ffffff;          /* 白地図の陸 */
+  --land-line: #c9cfcd;     /* 県境 */
+  --land-hot: #dbe9f0;      /* ドロップ先のハイライト */
+  --ink: #1e2321;
+  --ink-2: #5d6866;
+  --ink-3: #929c9a;
+  --accent: #2f6f8f;
+  --panel: #ffffff;
+  --rule: #dfe3e2;
+}
+*{box-sizing:border-box; -webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%}
+body{
+  background:radial-gradient(120% 90% at 50% -10%, #fbfcfb 0%, var(--board) 55%, var(--board-2) 100%);
+  color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Noto Sans JP",sans-serif;
+  overflow-x:hidden;user-select:none;-webkit-user-select:none;
+}
+.wrap{max-width:560px;margin:0 auto;padding:12px 12px 190px}
+header{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin:2px 0 10px}
+h1{font-size:15px;font-weight:600;margin:0}
+.count{font-size:13px;color:var(--ink-2);font-variant-numeric:tabular-nums}
+.count b{font-size:17px;color:var(--ink);font-weight:600}
+
+/* ---------- ボード（白地図＋自由配置） ---------- */
+.board{position:relative;width:100%;touch-action:none}
+.board svg{display:block;width:100%;height:auto}
+.board .land{fill:var(--land);stroke:var(--land-line);stroke-width:1.1;stroke-linejoin:round;cursor:pointer}
+.board .land.has{fill:#f7fbfd}
+.board .land.hot{fill:var(--land-hot);stroke:var(--accent);stroke-width:2}
+.mags{position:absolute;inset:0;pointer-events:none} /* 盤面全体を覆うので、クリックは下の地図へ通す */
+.mags .pin{position:absolute;transform:translate(-50%,-50%);cursor:grab;pointer-events:auto}
+
+/* ---------- マグネット ---------- */
+.mag{
+  position:relative;width:100%;aspect-ratio:1;border-radius:var(--mag-r,20%);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  color:#fff;text-align:center;line-height:1.08;background:var(--mag-bg,#888);
+  transform:rotate(var(--rot,0deg));
+  box-shadow:
+    0 calc(var(--thickness) * 1px) 0 var(--mag-edge, rgba(0,0,0,.35)),
+    0 calc((var(--thickness) + 1) * 1px) calc(var(--shadow-blur) * .25px) rgba(20,26,24, calc(var(--shadow-strength) * .9)),
+    0 calc((var(--thickness) + 3) * 1px) calc(var(--shadow-blur) * 1px) rgba(20,26,24, calc(var(--shadow-strength) * .7));
+}
+.mag::after{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;
+  background:linear-gradient(148deg, rgba(255,255,255,.42) 0%, rgba(255,255,255,.13) 32%, rgba(255,255,255,0) 52%, rgba(0,0,0,.07) 100%);}
+.mag .t1{font-size:var(--fs,12px);font-weight:700;z-index:1;padding:0 2px;letter-spacing:.01em}
+.mag img{width:100%;height:100%;object-fit:cover;display:block}
+.mag.sq{--mag-r:4%}
+
+/* 実物マグネットは写真。切り抜いた透明部分に box-shadow の厚みと ::after の光沢が
+   乗ると白いふちになるので、両方切って drop-shadow に置き換える。
+   drop-shadow はアルファに追従するので、実際の輪郭に沿って厚みと影が付く。
+   写真には元から光が入っているので、合成の光沢は足さない。 */
+.mag.photo{background:transparent!important;box-shadow:none!important;border-radius:0!important}
+.mag.photo::after{content:none}
+.mag.photo img{
+  border-radius:0;
+  filter:
+    drop-shadow(0 calc(var(--thickness) * 1px) 0 rgba(42,34,40,.58))
+    drop-shadow(0 calc((var(--thickness) + 2) * 1px) calc(var(--shadow-blur) * .5px) rgba(20,26,24, calc(var(--shadow-strength) * .85)));
+}
+.mag.round{--mag-r:50%}
+@keyframes place{
+  0%{transform:rotate(var(--rot)) scale(1.14) translateY(-14px)}
+  55%{transform:rotate(var(--rot)) scale(calc(1 - .07 * var(--bounce))) translateY(0)}
+  78%{transform:rotate(var(--rot)) scale(calc(1 + .035 * var(--bounce))) translateY(0)}
+  100%{transform:rotate(var(--rot)) scale(1) translateY(0)}
+}
+.mag.placing{animation:place calc(var(--drop-ms) * 1ms) cubic-bezier(.2,.9,.25,1) both}
+
+/* ---------- 県ボード ---------- */
+#pref{display:none}
+#pref.open{display:block}
+.pbar{display:flex;align-items:center;gap:10px;margin:2px 0 8px}
+.back{font:inherit;font-size:13px;padding:6px 12px;border:1px solid var(--rule);background:#fff;border-radius:8px;cursor:pointer;color:var(--ink)}
+.ptitle{font-size:15px;font-weight:600}
+.pcount{font-size:12px;color:var(--ink-2);margin-left:auto;font-variant-numeric:tabular-nums}
+
+/* ---------- トレイ ---------- */
+#tray{position:fixed;left:0;right:0;bottom:0;z-index:40;background:linear-gradient(#ffffffdd,#fff);
+  backdrop-filter:blur(8px);border-top:1px solid var(--rule);padding:8px 12px calc(8px + env(safe-area-inset-bottom))}
+#tray .lbl{font-size:11px;color:var(--ink-3);margin-bottom:6px;letter-spacing:.05em}
+#trayrow{display:flex;gap:8px;overflow-x:auto;padding-bottom:2px;min-height:56px}
+#trayrow .titem{flex:0 0 52px;width:52px;cursor:grab;touch-action:none}
+#trayrow .titem.done{opacity:.28}
+#trayrow .empty{font-size:12px;color:var(--ink-3);padding:18px 2px}
+
+#drag{position:fixed;z-index:100;pointer-events:none;display:none;will-change:transform}
+#drag.on{display:block}
+
+#tune{position:fixed;right:10px;bottom:104px;z-index:50}
+#tunebtn{font:inherit;font-size:12px;padding:7px 11px;border-radius:20px;border:1px solid var(--rule);background:#fff;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.08)}
+#tunebody{display:none;position:absolute;right:0;bottom:38px;width:250px;background:var(--panel);border:1px solid var(--rule);border-radius:12px;padding:12px;box-shadow:0 8px 30px rgba(0,0,0,.14);max-height:60vh;overflow:auto}
+#tunebody.open{display:block}
+#tunebody .r{display:flex;align-items:center;gap:8px;margin-bottom:7px;font-size:11.5px;color:var(--ink-2)}
+#tunebody .r span:first-child{flex:0 0 74px}
+#tunebody .r input[type=range]{flex:1;min-width:0}
+#tunebody .r .v{flex:0 0 34px;text-align:right;font-variant-numeric:tabular-nums;color:var(--ink)}
+#tunebody .dump{width:100%;font:inherit;font-size:11.5px;margin-top:6px;padding:6px;border:1px solid var(--rule);background:#fff;border-radius:7px;cursor:pointer}
+.hint{font-size:11.5px;color:var(--ink-3);margin:10px 0 0;line-height:1.65}
+@media (prefers-reduced-motion:reduce){.mag.placing{animation:none}}
+
+/* ---------- 合言葉ゲート（通りすがり対策。devtools で抜けられるので機密保護ではない） ---------- */
+#gate{position:fixed;inset:0;z-index:900;background:var(--board);display:flex;align-items:center;justify-content:center;padding:24px}
+#gate[hidden]{display:none}
+.gbox{width:100%;max-width:300px;display:flex;flex-direction:column;gap:10px}
+.gt{font-size:16px;font-weight:600;margin:0}
+.gs{font-size:13px;color:var(--ink-2);margin:0 0 4px}
+#gpw{font:inherit;font-size:16px;padding:10px 12px;border:1px solid var(--rule);border-radius:9px;background:#fff}
+#gbtn{font:inherit;font-size:14px;padding:10px;border:0;border-radius:9px;background:var(--accent);color:#fff;cursor:pointer}
+.gerr{font-size:12.5px;color:#b2402f;margin:0}
+
+/* ---------- 実物マグネットの登録 ---------- */
+#shot{position:fixed;inset:0;z-index:800;background:rgba(28,32,30,.55);display:none;align-items:flex-end}
+#shot.open{display:flex}
+.sbox{width:100%;max-width:560px;margin:0 auto;background:#fff;border-radius:16px 16px 0 0;padding:14px 14px calc(14px + env(safe-area-inset-bottom));max-height:92vh;overflow:auto}
+.sh{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.sh .t{font-size:15px;font-weight:600}
+.sh .x{margin-left:auto;font:inherit;font-size:13px;padding:5px 10px;border:1px solid var(--rule);background:#fff;border-radius:8px;cursor:pointer}
+#crop{position:relative;width:100%;max-width:300px;aspect-ratio:1;margin:0 auto;background:#eceeed;border-radius:10px;overflow:hidden;touch-action:none;cursor:grab}
+#crop canvas{position:absolute;inset:0;width:100%;height:100%}
+#crop .ring{position:absolute;inset:0;pointer-events:none;box-shadow:0 0 0 9999px rgba(255,255,255,.82)}
+#crop .ring.round{border-radius:50%}
+#crop .ring.soft{border-radius:20%}
+.srow{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:12.5px;color:var(--ink-2)}
+.srow span:first-child{flex:0 0 62px}
+.srow input[type=range]{flex:1;min-width:0}
+.schips{display:flex;gap:6px}
+.schips button{font:inherit;font-size:12px;padding:5px 10px;border:1px solid var(--rule);background:#fff;border-radius:20px;cursor:pointer;color:var(--ink)}
+.schips button.on{border-color:var(--accent);color:var(--accent);border-width:2px}
+#mpick{display:none;margin-top:10px}
+#mpick.open{display:block}
+#msearch{width:100%;font:inherit;font-size:16px;padding:9px 11px;border:1px solid var(--rule);border-radius:9px}
+#mlist{max-height:200px;overflow:auto;margin-top:8px;border:1px solid var(--rule);border-radius:9px}
+#mlist button{display:block;width:100%;text-align:left;font:inherit;font-size:14px;padding:9px 12px;border:0;border-bottom:1px solid var(--rule);background:#fff;cursor:pointer;color:var(--ink)}
+#mlist button:last-child{border-bottom:0}
+.sgo{width:100%;font:inherit;font-size:14px;padding:11px;margin-top:10px;border:0;border-radius:10px;background:var(--accent);color:#fff;cursor:pointer}
+.sgo[disabled]{opacity:.4;cursor:not-allowed}
+.snote{font-size:11.5px;color:var(--ink-3);line-height:1.6;margin:8px 0 0}
+#trayrow .addbtn{flex:0 0 52px;width:52px;height:52px;border:1.5px dashed var(--rule);border-radius:12px;background:#fff;color:var(--ink-2);font:inherit;font-size:11px;line-height:1.25;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center}
+#trayrow .titem.real{position:relative}
+</style>
+</head>
+<body>
+<div id="gate" hidden>
+  <div class="gbox">
+    <p class="gt">world-magnet フェーズ0</p>
+    <p class="gs">テスト版です。合言葉を入れてください。</p>
+    <input id="gpw" type="password" inputmode="text" autocomplete="off" placeholder="合言葉">
+    <button id="gbtn">入る</button>
+    <p class="gerr" id="gerr" hidden>合言葉が違います。</p>
+  </div>
+</div>
+
+<div class="wrap">
+  <header>
+    <h1>world-magnet <span style="color:var(--ink-3);font-weight:400">フェーズ0</span></h1>
+    <div class="count"><b id="cPref">0</b> / 47 都道府県</div>
+  </header>
+
+  <div id="japan" class="board"></div>
+
+  <div id="pref">
+    <div class="pbar">
+      <button class="back" id="back">← 日本</button>
+      <div class="ptitle" id="ptitle"></div>
+      <div class="pcount" id="pcount"></div>
+    </div>
+    <div id="pboard" class="board"></div>
+  </div>
+
+  <p class="hint" id="hint">県をタップすると、その県のボードが開きます。下のトレイからマグネットをドラッグして、地図の好きな位置に貼ってください。貼ったマグネットはあとから動かせます。マグネット同士は重なりません。</p>
+</div>
+
+<div id="drag"></div>
+
+<div id="tray">
+  <div class="lbl" id="traylbl">マグネット</div>
+  <div id="trayrow"></div>
+</div>
+
+<div id="shot">
+  <div class="sbox">
+    <div class="sh"><div class="t">実物のマグネットを登録</div><button class="x" id="sclose">閉じる</button></div>
+    <div id="crop"><canvas id="ccv"></canvas><div class="ring round" id="cring"></div></div>
+    <div class="srow"><span>かたち</span>
+      <div class="schips">
+        <button data-shape="round" class="on">丸</button>
+        <button data-shape="soft">角丸</button>
+        <button data-shape="square">四角</button>
+      </div>
+    </div>
+    <div class="srow"><span>大きさ</span><input type="range" id="czoom" min="100" max="400" value="100"></div>
+    <div class="srow"><span>白を抜く</span><input type="checkbox" id="cwhite"><span style="flex:1;font-size:11.5px">白い紙の上で撮ると、ふちの白が消えます</span></div>
+    <button class="sgo" id="snext">次へ（どこのマグネット？）</button>
+    <div id="mpick">
+      <input id="msearch" placeholder="市区町村を検索" autocomplete="off">
+      <div id="mlist"></div>
+    </div>
+    <p class="snote">画像はこの端末の中だけに保存されます。サーバーには送られません。AIの背景除去は使っていないので、切り抜きは手動です。</p>
+  </div>
+</div>
+<input type="file" id="cfile" accept="image/*" hidden>
+
+<div id="tune"><button id="tunebtn">調整</button><div id="tunebody"></div></div>
+
+<script>
+/* 配布前に GATE_PW を変えること。クライアント側のゲートなので devtools で突破できる。
+   狙いは検索や通りすがりの流入を止めることで、機密保護ではない。 */
+(function(){
+  var GATE_PW='magnet-2026';
+  var KEY='wm_gate_ok';
+  var ok=false; try{ ok = sessionStorage.getItem(KEY)==='1'; }catch(e){}
+  if(ok) return;
+  var g=document.getElementById('gate'); g.hidden=false;
+  document.querySelector('.wrap').style.visibility='hidden';
+  function tryIn(){
+    if(document.getElementById('gpw').value.trim()===GATE_PW){
+      try{ sessionStorage.setItem(KEY,'1'); }catch(e){}
+      g.hidden=true; document.querySelector('.wrap').style.visibility='';
+    }else{
+      document.getElementById('gerr').hidden=false;
+    }
+  }
+  document.getElementById('gbtn').onclick=tryIn;
+  document.getElementById('gpw').addEventListener('keydown',function(e){ if(e.key==='Enter') tryIn(); });
+  document.getElementById('gpw').focus();
+})();
+</script>
+<script src="./prefectures.js"></script>
+<script src="./municipalities.js"></script>
+<script src="./japan-paths.js"></script>
+<script src="./store.js"></script>
+<script>
+(function(){
+'use strict';
+
+if(!window.WM_PREFECTURES || !window.WM_MUNICIPALITIES || !window.WM_JAPAN_PATHS || !window.WMStore){
+  document.querySelector('.wrap').innerHTML='<p style="padding:24px;line-height:1.9">データファイルを読み込めませんでした。<br>'
+    +'prefectures.js / municipalities.js / japan-paths.js / store.js が index.html と同じ場所にあるか確認してください。<br>'
+    +'（file:// ではなく http:// で開いてください。ブラウザが localStorage を拒否します）</p>';
+  return;
+}
+
+/* ============ データ ============ */
+var JP = window.WM_JAPAN_PATHS;
+var PREF_NAME={}, PREF_PATH={};
+window.WM_PREFECTURES.forEach(function(p){ PREF_NAME[p.code]=p.shortName; });
+JP.prefs.forEach(function(p){ PREF_PATH[p.code]=p; });
+
+/* 北方領土（disputed）は訪問できないので一覧にも分母にも入れない */
+var MUNI={};
+window.WM_MUNICIPALITIES.forEach(function(m){
+  if(m.disputed) return;
+  (MUNI[m.prefCode] = MUNI[m.prefCode] || []).push(m.name);
+});
+function muniOf(c){ return MUNI[c]||[]; }
+
+/* ============ 状態 ============
+   rep[pref]=magId / npos[pref]=[x,y]（全国ボード座標）
+   placed[pref][muni]=magId / ppos[pref][muni]=[x,y]（県ボード座標） */
+var st = window.WMStore.loadState() || {};
+st.rep=st.rep||{}; st.npos=st.npos||{}; st.placed=st.placed||{}; st.ppos=st.ppos||{}; st.real=st.real||{};
+function save(){ window.WMStore.saveState(st); }
+window.WMStore.recordLaunch();
+var launches = window.WMStore.getLaunches().length;
+
+/* ============ 調整パネル ============ */
+var TUNE=[['drop-ms','落下速度',120,700,10],['bounce','跳ね返り',0,1,.05],
+  ['shadow-strength','影の濃さ',0,.8,.02],['shadow-blur','影のぼかし',0,40,1],
+  ['thickness','厚み',0,12,1],['tilt','傾きの幅',0,8,.5],['mag-size','大きさ',26,72,2]];
+var tv=(function(){ try{ return JSON.parse(localStorage.getItem('wm_tune_v1'))||{}; }catch(e){ return {}; } })();
+var soundOn = tv.sound !== 0;
+function rv(n){ return parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--'+n)); }
+TUNE.forEach(function(t){ if(tv[t[0]]!=null) document.documentElement.style.setProperty('--'+t[0], tv[t[0]]); });
+(function(){
+  var b=document.getElementById('tunebody'), h='';
+  TUNE.forEach(function(t){
+    var c = tv[t[0]]!=null?tv[t[0]]:rv(t[0]);
+    h+='<div class="r"><span>'+t[1]+'</span><input type="range" data-k="'+t[0]+'" min="'+t[2]+'" max="'+t[3]+'" step="'+t[4]+'" value="'+c+'"><span class="v" data-v="'+t[0]+'">'+c+'</span></div>';
+  });
+  h+='<div class="r"><span>効果音</span><input type="checkbox" id="snd"'+(soundOn?' checked':'')+'></div>';
+  h+='<button class="dump">今の値を出力</button>';
+  b.innerHTML=h;
+  b.addEventListener('input',function(e){
+    var k=e.target.getAttribute('data-k');
+    if(k){ tv[k]=parseFloat(e.target.value); document.documentElement.style.setProperty('--'+k,tv[k]);
+      b.querySelector('[data-v="'+k+'"]').textContent=tv[k]; saveTune(); redraw(); }
+    if(e.target.id==='snd'){ soundOn=e.target.checked; tv.sound=soundOn?1:0; saveTune(); }
+  });
+  b.querySelector('.dump').onclick=function(){
+    var o={}; TUNE.forEach(function(t){ o[t[0]]=tv[t[0]]!=null?tv[t[0]]:rv(t[0]); }); o.sound=soundOn?1:0;
+    var s=JSON.stringify(o); document.getElementById('hint').textContent='今の値: '+s;
+    try{ navigator.clipboard.writeText(s); }catch(e){}
+  };
+})();
+function saveTune(){ try{ localStorage.setItem('wm_tune_v1',JSON.stringify(tv)); }catch(e){} }
+document.getElementById('tunebtn').onclick=function(){ document.getElementById('tunebody').classList.toggle('open'); };
+
+/* ============ 効果音 ============ */
+var ac=null;
+function clack(){
+  if(!soundOn) return;
+  try{
+    ac = ac || new (window.AudioContext||window.webkitAudioContext)();
+    var t=ac.currentTime, o=ac.createOscillator(), g=ac.createGain();
+    o.type='sine'; o.frequency.setValueAtTime(180,t); o.frequency.exponentialRampToValueAtTime(70,t+.07);
+    g.gain.setValueAtTime(.22,t); g.gain.exponentialRampToValueAtTime(.001,t+.09);
+    o.connect(g).connect(ac.destination); o.start(t); o.stop(t+.1);
+    var len=Math.floor(ac.sampleRate*.02), buf=ac.createBuffer(1,len,ac.sampleRate), d=buf.getChannelData(0);
+    for(var i=0;i<len;i++) d[i]=(Math.random()*2-1)*Math.pow(1-i/len,3);
+    var n=ac.createBufferSource(), ng=ac.createGain(), hp=ac.createBiquadFilter();
+    hp.type='highpass'; hp.frequency.value=2200; ng.gain.value=.16;
+    n.buffer=buf; n.connect(hp).connect(ng).connect(ac.destination); n.start(t);
+  }catch(e){}
+  if(navigator.vibrate) try{ navigator.vibrate(12); }catch(e){}
+}
+
+/* ============ マグネット ============ */
+function hash(s){ var h=0; for(var i=0;i<s.length;i++) h=(h*31+s.charCodeAt(i))|0; return Math.abs(h); }
+function autoMagnet(name){
+  var h=hash(name);
+  return { id:'auto:'+name, name:name,
+    bg:'hsl('+(h%360)+' '+(44+(h>>3)%20)+'% '+(38+(h>>7)%12)+'%)',
+    edge:'hsl('+(h%360)+' '+(52+(h>>3)%20)+'% '+Math.max(14,(38+(h>>7)%12)-20)+'%)',
+    round:(h>>5)%3===0 };
+}
+var magCache={}, realURL={};    /* realURL[realId] = objectURL（起動時にまとめて読む） */
+function magById(id){
+  if(magCache[id]) return magCache[id];
+  if(id && id.indexOf('auto:')===0){ var m=autoMagnet(id.slice(5)); magCache[id]=m; return m; }
+  if(id && id.indexOf('real:')===0){
+    var rid=id.slice(5), r=st.real[rid];
+    if(!r) return null;
+    var rm={ id:id, name:r.muni, real:true, shape:r.shape, url:realURL[rid]||null };
+    magCache[id]=rm; return rm;
+  }
+  return null;
+}
+function magEl(m, px){
+  var d=document.createElement('div');
+  if(m.real){
+    /* 実物は写真そのもの。ふちの色は暗めの中間色にして厚みだけ出す。 */
+    /* 輪郭は画像のアルファが持っているので、CSS 側で形を作らない */
+    d.className='mag photo';
+    d.style.setProperty('--rot', ((hash(m.id)%1000/1000)*2-1)*rv('tilt')+'deg');
+    var im=document.createElement('img');
+    if(m.url) im.src=m.url;
+    d.appendChild(im);
+    return d;
+  }
+  d.className='mag'+(m.round?' round':'');
+  d.style.setProperty('--mag-bg',m.bg); d.style.setProperty('--mag-edge',m.edge);
+  d.style.setProperty('--rot', ((hash(m.id)%1000/1000)*2-1)*rv('tilt')+'deg');
+  var nm=m.name.replace(/[市町村区都府県]$/,'');
+  var base = px||rv('mag-size');
+  d.style.setProperty('--fs', Math.max(8, Math.round(base/(nm.length>=4?4.6:nm.length===3?3.6:2.9)))+'px');
+  d.innerHTML='<div class="t1">'+nm+'</div>';
+  return d;
+}
+
+/* ============ ボードの土台 ============ */
+/* パス文字列から bbox を出す（"Mx,y x,y ... Z" の繰り返し） */
+function bboxOf(d){
+  var nums=d.match(/-?\d+(?:\.\d+)?/g)||[], x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
+  for(var i=0;i+1<nums.length;i+=2){
+    var x=+nums[i], y=+nums[i+1];
+    if(x<x0)x0=x; if(x>x1)x1=x; if(y<y0)y0=y; if(y>y1)y1=y;
+  }
+  return {x:x0,y:y0,w:x1-x0,h:y1-y0};
+}
+
+/* ボードを1つ作る。paths=[{code,d}] / vb=viewBox */
+function buildBoard(host, paths, vb){
+  host.innerHTML='';
+  var ns='http://www.w3.org/2000/svg';
+  var svg=document.createElementNS(ns,'svg');
+  svg.setAttribute('viewBox', vb.x+' '+vb.y+' '+vb.w+' '+vb.h);
+  paths.forEach(function(p){
+    var el=document.createElementNS(ns,'path');
+    el.setAttribute('d',p.d); el.setAttribute('class','land'); el.dataset.code=p.code;
+    svg.appendChild(el);
+  });
+  host.appendChild(svg);
+  var layer=document.createElement('div'); layer.className='mags';
+  host.appendChild(layer);
+  host._svg=svg; host._layer=layer; host._vb=vb; host._w=host.clientWidth||0;
+  return host;
+}
+
+/* 画面座標 -> viewBox 座標 */
+function toVB(host, clientX, clientY){
+  var r=host._svg.getBoundingClientRect(), vb=host._vb;
+  return { x: vb.x + (clientX-r.left)/r.width*vb.w, y: vb.y + (clientY-r.top)/r.height*vb.h };
+}
+/* viewBox 座標 -> host 内の % */
+function toPct(host,p){
+  var vb=host._vb;
+  return { l:(p.x-vb.x)/vb.w*100, t:(p.y-vb.y)/vb.h*100 };
+}
+/* マグネット半径を viewBox 単位で */
+function radiusVB(host){
+  /* svg は width:100% ＋ viewBox なので、レイアウト幅がそのまま vb.w に対応する。
+     getBoundingClientRect ははみ出しを含みうるので使わない。 */
+  var w=host.clientWidth || host._svg.getBoundingClientRect().width;
+  return rv('mag-size')/2 / w * host._vb.w;
+}
+
+/* 重ならない位置を探す。
+   押し出し方式だと、同じ点に何枚も落としたときに局所解で止まって重なりが残る。
+   落とした点から螺旋状に外へ探して、最初に空いた場所を返す。
+   既に貼ってあるマグネットは動かさない（自分で置いた位置が勝手にずれないように）。 */
+function freeSpot(host, pos, others){
+  var w=host.clientWidth || host._w;
+  if(!w) return {x:pos.x,y:pos.y};      /* 非表示のボードでは位置を決められない。描画時に解く */
+  var size=rv('mag-size')/w*host._vb.w; /* 一辺を viewBox 単位に */
+  var need=size*1.03, half=size/2, vb=host._vb;
+  function ok(p){
+    if(p.x<vb.x+half||p.x>vb.x+vb.w-half||p.y<vb.y+half||p.y>vb.y+vb.h-half) return false;
+    for(var i=0;i<others.length;i++){
+      /* マグネットは正方形に近いので AABB で判定する（円だと角が噛む） */
+      if(Math.abs(p.x-others[i].x)<need && Math.abs(p.y-others[i].y)<need) return false;
+    }
+    return true;
+  }
+  if(ok(pos)) return {x:pos.x,y:pos.y};
+  var step=need*0.5;
+  for(var ring=1; ring<120; ring++){
+    var rad=step*ring, n=Math.max(8, Math.round(2*Math.PI*rad/step));
+    var off=ring*0.7;                       /* 毎回同じ方向に伸びないよう角度をずらす */
+    for(var k=0;k<n;k++){
+      var a=off+k*2*Math.PI/n;
+      var q={x:pos.x+Math.cos(a)*rad, y:pos.y+Math.sin(a)*rad};
+      if(ok(q)) return q;
+    }
+  }
+  return {x:pos.x,y:pos.y};               /* 埋まりきっていたら諦めて落とした場所へ */
+}
+
+function pinEl(host, m, pos, key){
+  var px=rv('mag-size'), pc=toPct(host,pos);
+  var w=document.createElement('div');
+  w.className='pin'; w.dataset.key=key;
+  w.style.left=pc.l+'%'; w.style.top=pc.t+'%'; w.style.width=px+'px';
+  w.appendChild(magEl(m,px));
+  return w;
+}
+
+/* ============ 全国ボード ============ */
+var natural = document.getElementById('japan');
+var VB_JP=(function(){ var n=JP.viewBox.split(' ').map(Number); return {x:n[0],y:n[1],w:n[2],h:n[3]}; })();
+
+function renderJapan(){
+  buildBoard(natural, JP.prefs, VB_JP);
+  natural._svg.querySelectorAll('.land').forEach(function(el){
+    if(Object.keys(st.placed[el.dataset.code]||{}).length) el.classList.add('has');
+  });
+  /* 位置未定の代表は、ここで重心から重なりを解いて確定させる。
+     県の重心にそのまま置くと関東が団子になる。順序はコード順で固定し、結果を再現可能にする。 */
+  var codes=Object.keys(st.rep).sort(), taken=[], dirty=false;
+  codes.forEach(function(c){ if(st.npos[c]) taken.push(st.npos[c]); });
+  codes.forEach(function(code){
+    var m=magById(st.rep[code]); if(!m) return;
+    if(!st.npos[code]){
+      st.npos[code]=freeSpot(natural, {x:PREF_PATH[code].cx, y:PREF_PATH[code].cy}, taken);
+      taken.push(st.npos[code]); dirty=true;
+    }
+    natural._layer.appendChild(pinEl(natural, m, st.npos[code], 'n:'+code));
+  });
+  if(dirty) save();
+  document.getElementById('cPref').textContent=Object.keys(st.rep).length;
+}
+
+/* ============ 県ボード ============ */
+var pboard=document.getElementById('pref'), phost=document.getElementById('pboard'), curPref=null;
+function openPref(code){
+  curPref=code;
+  natural.style.display='none'; pboard.classList.add('open');
+  document.getElementById('ptitle').textContent=PREF_NAME[code];
+  var path=PREF_PATH[code], bb=bboxOf(path.d), pad=Math.max(bb.w,bb.h)*0.10;
+  buildBoard(phost, [path], {x:bb.x-pad,y:bb.y-pad,w:bb.w+pad*2,h:bb.h+pad*2});
+  phost._svg.querySelector('.land').classList.add('has');
+  var placed=st.placed[code]||{}, pos=st.ppos[code]||{};
+  Object.keys(placed).forEach(function(nm){
+    var m=magById(placed[nm]); if(!m) return;
+    phost._layer.appendChild(pinEl(phost, m, pos[nm]||{x:phost._vb.x+phost._vb.w/2,y:phost._vb.y+phost._vb.h/2}, 'p:'+nm));
+  });
+  document.getElementById('pcount').textContent=Object.keys(placed).length+' / '+muniOf(code).length+' 市区町村';
+  renderTray();
+}
+document.getElementById('back').onclick=function(){
+  curPref=null; pboard.classList.remove('open'); natural.style.display='';
+  renderJapan(); renderTray();
+};
+
+/* ============ トレイ ============ */
+function renderTray(){
+  var row=document.getElementById('trayrow'); row.innerHTML='';
+  document.getElementById('traylbl').textContent = curPref
+    ? PREF_NAME[curPref]+'のマグネット — 地図の好きな位置にドラッグ'
+    : '県をタップするとマグネットが出ます';
+  if(!curPref){ row.innerHTML='<div class="empty">日本地図の県をタップしてください。貼ったマグネットはドラッグで動かせます。</div>'; return; }
+  var placed=st.placed[curPref]||{};
+
+  var add=document.createElement('button');
+  add.className='addbtn'; add.innerHTML='＋<br>実物';
+  add.onclick=openShot;
+  row.appendChild(add);
+
+  /* 実物マグネットは自動生成より先に出す。手持ちが主役なので。 */
+  Object.keys(st.real).forEach(function(rid){
+    var r=st.real[rid]; if(r.pref!==curPref) return;
+    var m=magById('real:'+rid); if(!m) return;
+    var w=document.createElement('div');
+    w.className='titem real'+(placed[r.muni]==='real:'+rid?' done':'');
+    w.dataset.id=m.id; w.dataset.muni=r.muni;
+    w.appendChild(magEl(m,52));
+    row.appendChild(w);
+  });
+
+  muniOf(curPref).forEach(function(nm){
+    var m=autoMagnet(nm); magCache[m.id]=m;
+    var w=document.createElement('div');
+    w.className='titem'+(placed[nm]?' done':''); w.dataset.id=m.id; w.dataset.muni=nm;
+    w.appendChild(magEl(m,52));
+    row.appendChild(w);
+  });
+}
+
+/* ============ ドラッグ（トレイから／ボード上の移動） ============ */
+var dragEl=document.getElementById('drag'), drag=null;
+
+function startDrag(e, opts){
+  drag=opts; drag.moved=false;
+  var px=rv('mag-size');
+  dragEl.style.width=px+'px'; dragEl.innerHTML=''; dragEl.appendChild(magEl(opts.mag,px));
+  dragEl.classList.add('on'); moveDrag(e);
+  try{ e.target.setPointerCapture(e.pointerId); }catch(_){}
+  window.addEventListener('pointermove', moveDrag);
+  window.addEventListener('pointerup', endDrag);
+  window.addEventListener('pointercancel', endDrag);
+}
+function moveDrag(e){
+  if(!drag) return;
+  drag.moved=true;
+  var px=rv('mag-size');
+  dragEl.style.transform='translate('+(e.clientX-px/2)+'px,'+(e.clientY-px/2)+'px) scale(1.08)';
+  var host=drag.host;
+  host._svg.querySelectorAll('.land').forEach(function(el){ el.classList.remove('hot'); });
+  var tgt=targetPath(host, e.clientX, e.clientY, drag.prefCode);
+  if(tgt) tgt.classList.add('hot');
+}
+/* 落とし先の県。全国ボードでは「そのマグネットの県」だけがガイドになる */
+function targetPath(host, cx, cy, prefCode){
+  if(prefCode) return host._svg.querySelector('.land[data-code="'+prefCode+'"]');
+  return host._svg.querySelector('.land');
+}
+function endDrag(e){
+  window.removeEventListener('pointermove', moveDrag);
+  window.removeEventListener('pointerup', endDrag);
+  window.removeEventListener('pointercancel', endDrag);
+  dragEl.classList.remove('on');
+  if(!drag) return;
+  var host=drag.host;
+  host._svg.querySelectorAll('.land').forEach(function(el){ el.classList.remove('hot'); });
+  if(!drag.moved && drag.onTap){ drag.onTap(); drag=null; return; }
+  var pos=toVB(host, e.clientX, e.clientY);
+  drag.commit(pos);
+  drag=null;
+}
+
+/* トレイから貼る */
+document.getElementById('trayrow').addEventListener('pointerdown', function(e){
+  var it=e.target.closest('.titem'); if(!it||!curPref) return;
+  e.preventDefault();
+  var nm=it.dataset.muni, m=magById(it.dataset.id);
+  startDrag(e, { host:phost, mag:m, prefCode:curPref, commit:function(pos){
+    placeMuni(nm, m.id, pos);
+  }});
+});
+
+/* ボード上のマグネットを動かす（全国／県 共通） */
+function bindBoardDrag(host, isNational){
+  host.addEventListener('pointerdown', function(e){
+    var pin=e.target.closest('.pin'); if(!pin) return;
+    e.preventDefault(); e.stopPropagation();
+    var key=pin.dataset.key, kind=key.slice(0,1), id=key.slice(2);
+    var magId = isNational ? st.rep[id] : (st.placed[curPref]||{})[id];
+    var m=magById(magId); if(!m) return;
+    pin.style.visibility='hidden';
+    startDrag(e, {
+      host:host, mag:m, prefCode: isNational ? id : curPref,
+      onTap:function(){ pin.style.visibility=''; if(isNational) openPref(id); },
+      commit:function(pos){
+        if(isNational){ st.npos[id]=freeSpot(host,pos,others(host,'n:'+id)); save(); renderJapan(); }
+        else{ st.ppos[curPref]=st.ppos[curPref]||{}; st.ppos[curPref][id]=freeSpot(host,pos,others(host,'p:'+id)); save(); openPref(curPref); }
+        clack();
+      }
+    });
+  });
+}
+function others(host, skipKey){
+  var out=[];
+  if(host===natural){
+    Object.keys(st.rep).forEach(function(c){
+      if('n:'+c===skipKey) return;
+      out.push(st.npos[c] || {x:PREF_PATH[c].cx, y:PREF_PATH[c].cy});
+    });
+  }else{
+    var pos=st.ppos[curPref]||{};
+    Object.keys(st.placed[curPref]||{}).forEach(function(nm){
+      if('p:'+nm===skipKey) return;
+      if(pos[nm]) out.push(pos[nm]);
+    });
+  }
+  return out;
+}
+
+function placeMuni(nm, magId, pos){
+  var c=curPref;
+  st.placed[c]=st.placed[c]||{}; st.ppos[c]=st.ppos[c]||{};
+  var isNew=!st.placed[c][nm];
+  st.placed[c][nm]=magId;
+  st.ppos[c][nm]=freeSpot(phost, pos, others(phost,'p:'+nm));
+  if(!st.rep[c]) st.rep[c]=magId;   /* 最初の1枚がその県の代表になる。位置は renderJapan で決める */
+  save(); openPref(c);
+  document.getElementById('cPref').textContent=Object.keys(st.rep).length;
+  var pin=phost._layer.querySelector('.pin[data-key="p:'+nm+'"] .mag');
+  if(pin && isNew) pin.classList.add('placing');
+  clack();
+}
+
+function redraw(){ if(curPref) openPref(curPref); else renderJapan(); }
+
+/* ============ 実物マグネットの登録 ============
+   AI の背景除去は使わない（ライセンスと費用の判断は docs/04-decisions.md）。
+   撮影ガイド枠＋手動マスク＋白背景のフラッドフィルで通す。 */
+var shot=document.getElementById('shot'), ccv=document.getElementById('ccv'), cring=document.getElementById('cring');
+var cimg=null, cz=1, cox=0, coy=0, cshape='round', CS=600;
+ccv.width=CS; ccv.height=CS;
+
+function openShot(){ document.getElementById('cfile').click(); }
+document.getElementById('sclose').onclick=function(){ shot.classList.remove('open'); };
+document.getElementById('cfile').addEventListener('change', function(e){
+  var f=e.target.files && e.target.files[0]; if(!f) return;
+  var url=URL.createObjectURL(f), im=new Image();
+  im.onload=function(){
+    cimg=im; cz=1; cox=0; coy=0;
+    document.getElementById('czoom').value=100;
+    document.getElementById('cwhite').checked=false;
+    document.getElementById('mpick').classList.remove('open');
+    document.getElementById('snext').style.display='';
+    shot.classList.add('open');
+    drawCrop();
+  };
+  im.onerror=function(){ alert('この画像は読み込めませんでした。'); };
+  im.src=url;
+  e.target.value='';                       /* 同じ写真をもう一度選べるように */
+});
+
+function baseScale(){ return CS/Math.min(cimg.width,cimg.height); }   /* 短辺を枠に合わせる */
+function drawCrop(){
+  if(!cimg) return;
+  var g=ccv.getContext('2d');
+  g.clearRect(0,0,CS,CS); g.fillStyle='#eceeed'; g.fillRect(0,0,CS,CS);
+  var sc=baseScale()*cz, w=cimg.width*sc, h=cimg.height*sc;
+  g.drawImage(cimg, (CS-w)/2+cox, (CS-h)/2+coy, w, h);
+}
+document.getElementById('czoom').addEventListener('input',function(e){ cz=e.target.value/100; drawCrop(); });
+document.querySelectorAll('.schips button').forEach(function(b){
+  b.onclick=function(){
+    document.querySelectorAll('.schips button').forEach(function(x){ x.classList.remove('on'); });
+    b.classList.add('on'); cshape=b.dataset.shape;
+    cring.className='ring'+(cshape==='round'?' round':cshape==='soft'?' soft':'');
+  };
+});
+(function(){                                 /* 枠の中をドラッグして位置を合わせる */
+  var el=document.getElementById('crop'), on=false, px=0, py=0;
+  el.addEventListener('pointerdown',function(e){ on=true; px=e.clientX; py=e.clientY; try{el.setPointerCapture(e.pointerId);}catch(_){} });
+  el.addEventListener('pointermove',function(e){
+    if(!on) return;
+    var r=el.getBoundingClientRect(), k=CS/r.width;
+    cox+=(e.clientX-px)*k; coy+=(e.clientY-py)*k; px=e.clientX; py=e.clientY; drawCrop();
+  });
+  ['pointerup','pointercancel'].forEach(function(t){ el.addEventListener(t,function(){ on=false; }); });
+})();
+
+/* 端から連結した明るい画素だけ透明にする。
+   単純なしきい値だとマグネットの中の白まで抜けるので、フラッドフィルにする。 */
+function stripWhite(g, w, h, thr){
+  var im=g.getImageData(0,0,w,h), d=im.data, seen=new Uint8Array(w*h), stack=[], i;
+  for(i=0;i<w;i++){ stack.push(i); stack.push((h-1)*w+i); }
+  for(i=0;i<h;i++){ stack.push(i*w); stack.push(i*w+w-1); }
+  while(stack.length){
+    i=stack.pop();
+    if(seen[i]) continue; seen[i]=1;
+    var o=i*4;
+    if((d[o]+d[o+1]+d[o+2])/3 < thr) continue;
+    d[o+3]=0;
+    var x=i%w, y=(i/w)|0;
+    if(x>0) stack.push(i-1);
+    if(x<w-1) stack.push(i+1);
+    if(y>0) stack.push(i-w);
+    if(y<h-1) stack.push(i+w);
+  }
+  g.putImageData(im,0,0);
+}
+
+function cropToBlob(){
+  var c=document.createElement('canvas'); c.width=CS; c.height=CS;
+  var g=c.getContext('2d');
+  var sc=baseScale()*cz, w=cimg.width*sc, h=cimg.height*sc;
+  g.drawImage(cimg,(CS-w)/2+cox,(CS-h)/2+coy,w,h);
+  if(document.getElementById('cwhite').checked) stripWhite(g,CS,CS,232);
+  g.globalCompositeOperation='destination-in';
+  g.fillStyle='#000'; g.beginPath();
+  if(cshape==='round') g.arc(CS/2,CS/2,CS/2,0,Math.PI*2);
+  else if(cshape==='soft'){ var r=CS*0.20; g.moveTo(r,0); g.arcTo(CS,0,CS,CS,r); g.arcTo(CS,CS,0,CS,r); g.arcTo(0,CS,0,0,r); g.arcTo(0,0,CS,0,r); }
+  else g.rect(0,0,CS,CS);
+  g.fill();
+  return new Promise(function(res){ c.toBlob(res,'image/webp',0.9); });
+}
+
+document.getElementById('snext').onclick=function(){
+  document.getElementById('mpick').classList.add('open');
+  this.style.display='none';
+  renderMlist('');
+  document.getElementById('msearch').focus();
+};
+document.getElementById('msearch').addEventListener('input',function(e){ renderMlist(e.target.value.trim()); });
+function renderMlist(q){
+  var list=muniOf(curPref).filter(function(n){ return !q || n.indexOf(q)>=0; }).slice(0,60);
+  var el=document.getElementById('mlist'); el.innerHTML='';
+  list.forEach(function(nm){
+    var b=document.createElement('button'); b.textContent=nm;
+    b.onclick=function(){ saveReal(nm); };
+    el.appendChild(b);
+  });
+  if(!list.length) el.innerHTML='<button disabled style="color:var(--ink-3)">見つかりません</button>';
+}
+
+function saveReal(nm){
+  var rid='r'+Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+  cropToBlob().then(function(blob){
+    if(!blob) throw new Error('blob');
+    /* 長辺512・webp。透明を残したいので type を指定する（既定は JPEG） */
+    return window.WMStore.prepareImage(blob,{maxEdge:512,type:'image/webp',quality:0.85})
+      .then(function(b){ return window.WMStore.putImage('img:'+rid, b||blob); });
+  }).then(function(){
+    return window.WMStore.getImageURL('img:'+rid);
+  }).then(function(url){
+    realURL[rid]=url;
+    st.real[rid]={pref:curPref, muni:nm, shape:cshape, at:Date.now()};
+    save();
+    shot.classList.remove('open');
+    renderTray();
+    document.getElementById('hint').textContent='「'+nm+'」の実物マグネットを登録しました。トレイからドラッグして貼ってください。';
+  }).catch(function(){
+    alert('保存できませんでした。別の写真で試してください。');
+  });
+}
+
+/* 県を開くタップ。
+   愛知は468px幅の地図上で 23x20px しかなく、香川や大阪はさらに小さい。
+   パスの正確な当たりだけだと指では押せないので、重心までの距離も併用する。 */
+natural.addEventListener('click', function(e){
+  if(e.target.closest && e.target.closest('.pin')) return;   /* マグネットのタップは別処理 */
+  var w=natural.clientWidth||natural._w; if(!w) return;
+  var px2vb=function(px){ return px/w*natural._vb.w; };
+  var p=toVB(natural, e.clientX, e.clientY);
+  var best=null, bd=1e9;
+  JP.prefs.forEach(function(q){
+    var d=Math.hypot(p.x-q.cx, p.y-q.cy);
+    if(d<bd){ bd=d; best=q; }
+  });
+  /* 重心のすぐ近くを突いていたら、それが狙いとみなす（小さい県ほどこれで拾える） */
+  if(best && bd < px2vb(24)){ openPref(best.code); return; }
+  var el = e.target.closest ? e.target.closest('.land') : null;
+  if(el && el.dataset.code){ openPref(el.dataset.code); return; }
+  /* 海の上でも、近ければいちばん近い県を開く */
+  if(best && bd < px2vb(60)) openPref(best.code);
+});
+
+bindBoardDrag(natural, true);
+bindBoardDrag(phost, false);
+
+/* 実物の画像URLを先に揃えてから描く。magEl は同期なので、後から差すと空になる。 */
+Promise.all(Object.keys(st.real).map(function(rid){
+  return window.WMStore.getImageURL('img:'+rid).then(function(u){ if(u) realURL[rid]=u; });
+})).catch(function(){}).then(function(){
+  magCache={};
+  renderJapan(); renderTray();
+});
+renderJapan(); renderTray();
+document.getElementById('hint').textContent+='（起動 '+launches+' 回目）';
+})();
+</script>
+</body>
+</html>

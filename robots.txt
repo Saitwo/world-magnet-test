@@ -1,0 +1,4 @@
+# world-magnet フェーズ0 プロトタイプ — 検索エンジンには一切載せない。
+# 合言葉ゲートと <meta name="robots" content="noindex,nofollow"> と併用する。
+User-agent: *
+Disallow: /

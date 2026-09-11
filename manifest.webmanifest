@@ -1,0 +1,21 @@
+{
+  "name": "world magnet",
+  "short_name": "magnet",
+  "description": "集めたマグネットを日本地図に貼るボード（フェーズ0プロトタイプ）",
+  "lang": "ja",
+  "dir": "ltr",
+  "start_url": "./index.html",
+  "scope": "./",
+  "id": "/world-magnet-v0/",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone"],
+  "orientation": "portrait",
+  "background_color": "#f2f3f2",
+  "theme_color": "#f2f3f2",
+  "categories": ["travel", "lifestyle"],
+  "prefer_related_applications": false,
+  "icons": [
+    { "src": "./icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "./icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}
