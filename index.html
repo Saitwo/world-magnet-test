@@ -58,8 +58,13 @@ h1{font-size:15px;font-weight:600;margin:0}
 .board .land{fill:var(--land);stroke:var(--land-line);stroke-width:1.1;stroke-linejoin:round;cursor:pointer}
 .board .land.has{fill:#f7fbfd}
 .board .land.hot{fill:var(--land-hot);stroke:var(--accent);stroke-width:2}
+/* 全国ボードは見るための盤面。地図は位置関係の手がかりとして薄く残す。
+   マグネットは重心から散らすので輪郭と厳密には合わない。濃いと「ずれている」と読める。 */
+#japan svg{opacity:.5}
 .mags{position:absolute;inset:0;pointer-events:none} /* 盤面全体を覆うので、クリックは下の地図へ通す */
 .mags .pin{position:absolute;transform:translate(-50%,-50%);cursor:grab;pointer-events:auto}
+.mags .msc{position:absolute;left:0;top:0;transform-origin:0 0}
+#japan .pin{cursor:pointer}
 
 /* ---------- マグネット ---------- */
 .mag{
@@ -215,7 +220,7 @@ h1{font-size:15px;font-weight:600;margin:0}
     <div class="bview"><div id="pboard" class="board"></div></div>
   </div>
 
-  <p class="hint" id="hint">県をタップすると、その県のボードが開きます。下のトレイからマグネットをドラッグして、地図の好きな位置に貼ってください。貼ったマグネットはあとから動かせます。マグネット同士は重なりません。</p>
+  <p class="hint" id="hint">日本地図では、集めたマグネットが位置関係に沿って自動で並びます。県かマグネットをタップすると、その県のボードが開きます。県のボードで、下のトレイからドラッグして好きな位置に貼ってください。</p>
 </div>
 
 <div id="drag"></div>
@@ -310,8 +315,10 @@ window.WM_MUNICIPALITIES.forEach(function(m){
 function muniOf(c){ return MUNI[c]||[]; }
 
 /* ============ 状態 ============
-   rep[pref]=magId / npos[pref]=[x,y]（全国ボード座標）
-   placed[pref][muni]=magId / ppos[pref][muni]=[x,y]（県ボード座標） */
+   placed[pref][muni]=magId / ppos[pref][muni]=[x,y]（県ボード座標。本人が置いた位置）
+   lastPlaced = 最後に新しく貼った時刻（通過条件②の起点）
+   rep / npos は旧・全国ボード（代表マグネット1枚＋手置き）の名残。2026-09-13 に
+   全国ボードを自動配置へ変えたので読まない。消すと戻せないので残してある。 */
 var st = window.WMStore.loadState() || {};
 st.rep=st.rep||{}; st.npos=st.npos||{}; st.placed=st.placed||{}; st.ppos=st.ppos||{}; st.real=st.real||{};
 function save(){ window.WMStore.saveState(st); }
@@ -454,6 +461,7 @@ function magEl(m, px){
     if(m.rid) { im.dataset.rid=m.rid; im.dataset.lod = m.thumb ? 'thumb' : 'full'; }
     if(first) im.src=first;
     im.decoding='async';
+    im.draggable=false;
     d.appendChild(im);
     return d;
   }
@@ -490,9 +498,13 @@ function bboxOf(d){
        拡大される限り viewBox 単位の大きさは変わらないので、重なり判定に手を入れなくてよい
      - pin は % 配置なので、位置の再計算が要らない
    viewBox を書き換える方式だと上の3つすべてを直す必要がある。 */
-var ZMAX=10;        /* 46px × 10 = 460px。手に持つ距離（約400px）に届く */
-var ZOOM_LOOK=2;    /* これ以上寄ったら「1枚を見た」と数える */
-var LOD_Z=1.5;      /* これ以上寄ったら縮小版から実寸版に差し替える */
+/* 倍率の意味は盤面ごとのマグネットの大きさで変わる（全国ボードは持ち物が増えると小さく出す）。
+   なので閾値は倍率ではなく「画面上で何pxに見えているか」で持つ。 */
+var ZMAX=10;         /* 最低でもこの倍率までは寄れる */
+var NEAR_PX=460;     /* ここまで寄れるようにする。手に持つ距離（約400px）に届く */
+var LOOK_PX=92;      /* 画面上でこの大きさを超えたら「1枚を見た」と数える（46pxの2倍） */
+function basePx(host){ return host._magPx || rv('mag-size'); }
+function zmaxOf(host){ return Math.max(ZMAX, NEAR_PX/basePx(host)); }
 
 function zs(host){
   if(!host._zs) host._zs={z:1,tx:0,ty:0,looked:false};
@@ -502,7 +514,7 @@ function activeBoard(){ return curPref ? phost : natural; }
 
 function zoomClamp(host){
   var s=zs(host), W=host.clientWidth, H=host.clientHeight;
-  s.z=Math.max(1, Math.min(ZMAX, s.z));
+  s.z=Math.max(1, Math.min(zmaxOf(host), s.z));
   if(!W||!H){ s.tx=0; s.ty=0; return; }
   /* transform-origin が 0 0 なので中身は [tx, tx+z*W]。窓 [0,W] を覆う範囲に収める。 */
   s.tx=Math.max(W-s.z*W, Math.min(0, s.tx));
@@ -518,15 +530,16 @@ function zoomApply(host){
     host.classList.add('zoomed');
   }
   /* 寄ったら「見た」と数える。閾値を上下に跨ぐたびに数えないよう、1回の寄りで1回だけ。 */
-  if(s.z>=ZOOM_LOOK && !s.looked){ s.looked=true; window.WMStore.recordLook('zoom'); }
-  if(s.z<ZOOM_LOOK) s.looked=false;
+  var seen=basePx(host)*s.z;
+  if(seen>=LOOK_PX && !s.looked){ s.looked=true; window.WMStore.recordLook('zoom'); }
+  if(seen<LOOK_PX) s.looked=false;
   updateLOD(host);
   zoomUI();
 }
 /* 焦点 (fx,fy)（窓の左上を原点とする座標）を固定したまま倍率を nz にする */
 function zoomTo(host, nz, fx, fy){
   var s=zs(host), before=s.z;
-  nz=Math.max(1, Math.min(ZMAX, nz));
+  nz=Math.max(1, Math.min(zmaxOf(host), nz));
   if(nz===before) return;
   var k=nz/before;
   s.z=nz;
@@ -543,7 +556,9 @@ function zoomReset(host){
    1枚あたり約100万画素を無駄にデコードする。北海道は最大63枚並ぶので、縮小版を用意して
    寄ったときだけ実寸版に差し替える。 */
 function updateLOD(host){
-  var want = zs(host).z >= LOD_Z ? 'full' : 'thumb';
+  /* 画面上の実画素（CSS px × 倍率 × 端末の密度）が縮小版を超えたら実寸版にする */
+  var dev = basePx(host) * zs(host).z * (window.devicePixelRatio||1);
+  var want = dev > (typeof THUMB!=='undefined' && THUMB ? THUMB : 192) ? 'full' : 'thumb';
   host.querySelectorAll('img[data-rid]').forEach(function(im){
     if(im.dataset.lod===want) return;
     var rid=im.dataset.rid;
@@ -558,7 +573,7 @@ function zoomUI(){
   var host=activeBoard(), s=zs(host), ui=document.getElementById('zoomui');
   ui.hidden=false;
   document.getElementById('zval').textContent=s.z.toFixed(1)+'×';
-  document.getElementById('zin').disabled = s.z>=ZMAX-1e-6;
+  document.getElementById('zin').disabled = s.z>=zmaxOf(host)-1e-6;
   document.getElementById('zout').disabled = s.z<=1+1e-6;
   document.getElementById('zrst').disabled = s.z<=1+1e-6;
 }
@@ -612,7 +627,8 @@ function bindZoom(host){
       pinchBase={d:t.d, z:s.z, tx:s.tx, ty:s.ty, fx:t.fx, fy:t.fy};
       panBase=null;
       e.preventDefault();
-    }else if(n===1 && zs(host).z>1 && !e.target.closest('.pin')){
+    }else if(n===1 && zs(host).z>1 && !(host===phost && e.target.closest('.pin'))){
+      /* 県ボードのピンは掴んで動かすもの。全国ボードのピンは動かないので、その上からでも送る */
       var p=viewPt(e), s2=zs(host);
       panBase={px:p.x, py:p.y, tx:s2.tx, ty:s2.ty, moved:false};
     }
@@ -624,7 +640,7 @@ function bindZoom(host){
     if(pinchBase){
       var t=two(); if(!t) return;
       var s=zs(host);
-      var nz=Math.max(1, Math.min(ZMAX, pinchBase.z*(t.d/pinchBase.d)));
+      var nz=Math.max(1, Math.min(zmaxOf(host), pinchBase.z*(t.d/pinchBase.d)));
       var k=nz/pinchBase.z;
       s.z=nz;
       /* 指の中心が動いた分は送りになる（ピンチしながら位置も直せる） */
@@ -713,10 +729,10 @@ function radiusVB(host){
    押し出し方式だと、同じ点に何枚も落としたときに局所解で止まって重なりが残る。
    落とした点から螺旋状に外へ探して、最初に空いた場所を返す。
    既に貼ってあるマグネットは動かさない（自分で置いた位置が勝手にずれないように）。 */
-function freeSpot(host, pos, others){
+function freeSpot(host, pos, others, sizePx){
   var w=host.clientWidth || host._w;
   if(!w) return {x:pos.x,y:pos.y};      /* 非表示のボードでは位置を決められない。描画時に解く */
-  var size=rv('mag-size')/w*host._vb.w; /* 一辺を viewBox 単位に */
+  var size=(sizePx||rv('mag-size'))/w*host._vb.w; /* 一辺を viewBox 単位に */
   var need=size*1.03, half=size/2, vb=host._vb;
   function ok(p){
     if(p.x<vb.x+half||p.x>vb.x+vb.w-half||p.y<vb.y+half||p.y>vb.y+vb.h-half) return false;
@@ -740,12 +756,19 @@ function freeSpot(host, pos, others){
   return {x:pos.x,y:pos.y};               /* 埋まりきっていたら諦めて落とした場所へ */
 }
 
-function pinEl(host, m, pos, key){
-  var px=rv('mag-size'), pc=toPct(host,pos);
+function pinEl(host, m, pos, key, sizePx){
+  var base=rv('mag-size'), px=sizePx||base, pc=toPct(host,pos);
   var w=document.createElement('div');
   w.className='pin'; w.dataset.key=key;
   w.style.left=pc.l+'%'; w.style.top=pc.t+'%'; w.style.width=px+'px';
-  w.appendChild(magEl(m,px));
+  if(px===base){ w.appendChild(magEl(m,px)); return w; }
+  /* 小さく出すときは、いつもの大きさで作ってから縮める。文字・厚み・影の比率がそのまま保たれ、
+     寄ったときに県ボードと同じ見た目になる（文字だけ最小サイズで潰れる、が起きない）。 */
+  w.style.height=px+'px';
+  var sc=document.createElement('div');
+  sc.className='msc'; sc.style.width=base+'px'; sc.style.transform='scale('+(px/base)+')';
+  sc.appendChild(magEl(m,base));
+  w.appendChild(sc);
   return w;
 }
 
@@ -753,26 +776,137 @@ function pinEl(host, m, pos, key){
 var natural = document.getElementById('japan');
 var VB_JP=(function(){ var n=JP.viewBox.split(' ').map(Number); return {x:n[0],y:n[1],w:n[2],h:n[3]}; })();
 
+/* 1枚以上貼ってある県の数。「17 / 47 都道府県」の分子 */
+function prefCount(){
+  return Object.keys(st.placed).filter(function(c){ return Object.keys(st.placed[c]||{}).length; }).length;
+}
+
+/* ---- 全国ボードの自動配置 ----
+   全国ボードは「見る」ための盤面。集めたマグネットを全部出し、位置は地理の位置関係で
+   自動に決める（2026-09-13）。以前は代表1枚／県だったので、愛知で12枚集めても全国には
+   1枚しか出ず、「増えていくのが楽しい」が47枚で頭打ちになっていた。
+
+   市区町村の座標は持たない（04・2026-09-08）ので、同じ県のマグネットはすべて県の重心を
+   起点にする。全国スケールでは県内の正確な位置はどうせ見分けられない。
+     1. 県ごとに重心のまわりへヒマワリ状（Vogel螺旋）に初期配置する。
+        k番目を半径 c√k・角度 k×黄金角 に置くと、同じ県の中は最初からほぼ重ならない
+     2. 反発と、重心へ戻る弱い引力で緩和する。隣の県の群れと押し合って自然に散る。
+        押す向きは中心を結ぶ線（放射状）。軸方向に押すと碁盤目に並んで地図に見えない
+     3. 最後に freeSpot で1枚ずつ確定させ、重なりゼロを保証する。
+        重心に近いものから確定するので、家から遠くへ飛ばされるのは外側の数枚だけになる
+   順序と初期値はすべてデータから決まるので、同じ持ち物なら毎回同じ並びになる。 */
+var GOLDEN=Math.PI*(3-Math.sqrt(5));
+
+function nationalItems(){
+  var out=[];
+  Object.keys(st.placed).sort().forEach(function(code){
+    var pp=PREF_PATH[code]; if(!pp) return;
+    /* 県内の順は総務省コード順（多くは県庁所在地が先頭）。先頭が群れの真ん中に来る。 */
+    var order=muniOf(code), idx=0;
+    Object.keys(st.placed[code]||{}).map(function(nm){
+      var k=order.indexOf(nm); return {nm:nm, k:k<0?1e6:k};
+    }).sort(function(a,b){ return a.k-b.k || (a.nm<b.nm?-1:a.nm>b.nm?1:0); })
+    .forEach(function(o){
+      var magId=st.placed[code][o.nm];
+      if(!magById(magId)) return;          /* 画像が消えた実物などは場所を取らせない */
+      out.push({code:code, muni:o.nm, magId:magId, idx:idx++, anchor:{x:pp.cx, y:pp.cy}});
+    });
+  });
+  return out;
+}
+
+/* 大きさ sizePx で配置を解く。戻り値は viewBox 座標の配列と、重心からのずれ（画面px）の90%点。 */
+function layoutAt(host, items, sizePx){
+  var w=host.clientWidth, vb=host._vb;
+  var size=sizePx/w*vb.w, need=size*1.03, half=size/2;
+  var n=items.length, P=new Array(n), c=need*0.72, i, j;
+  for(i=0;i<n;i++){
+    var it=items[i], r=c*Math.sqrt(it.idx), a=it.idx*GOLDEN;
+    P[i]={x:it.anchor.x+Math.cos(a)*r, y:it.anchor.y+Math.sin(a)*r};
+  }
+  var minX=vb.x+half, maxX=vb.x+vb.w-half, minY=vb.y+half, maxY=vb.y+vb.h-half;
+  /* 全ペアを見るので O(n²)。フェーズ0の数十枚では一瞬。数百枚を超えたら回数を絞る */
+  var ITER = n>400 ? 40 : 160;
+  for(var t=0; t<ITER; t++){
+    var K=0.06*(1-t/ITER), worst=0;        /* 引力は徐々に弱め、最後は重なりの解消を優先 */
+    for(i=0;i<n;i++){
+      var pi=P[i];
+      for(j=i+1;j<n;j++){
+        var pj=P[j], dx=pj.x-pi.x, dy=pj.y-pi.y;
+        var m=Math.max(Math.abs(dx),Math.abs(dy));
+        if(m>=need) continue;
+        if(m<1e-6){                         /* 完全に同じ点。添字から決まる向きに逃がす */
+          var a2=((i*37+j*101)%360)*Math.PI/180;
+          dx=Math.cos(a2)*1e-4; dy=Math.sin(a2)*1e-4; m=Math.max(Math.abs(dx),Math.abs(dy));
+        }
+        /* 中心を結ぶ線に沿って、AABB が離れる距離まで広げる。半分ずつ動かす */
+        var f=(need/m-1)/2, hx=dx*f, hy=dy*f;
+        pi.x-=hx; pi.y-=hy; pj.x+=hx; pj.y+=hy;
+        if(need-m>worst) worst=need-m;
+      }
+    }
+    for(i=0;i<n;i++){
+      var q=P[i], an=items[i].anchor;
+      q.x+=(an.x-q.x)*K; q.y+=(an.y-q.y)*K;
+      q.x=Math.max(minX,Math.min(maxX,q.x)); q.y=Math.max(minY,Math.min(maxY,q.y));
+    }
+    if(worst<need*0.002 && K<0.01) break;
+  }
+  var order=P.map(function(p,k){ var an=items[k].anchor; return {k:k, d:Math.hypot(p.x-an.x,p.y-an.y)}; })
+             .sort(function(a,b){ return a.d-b.d || a.k-b.k; });
+  var fixed=[], out=new Array(n);
+  order.forEach(function(o){ var q2=freeSpot(host, P[o.k], fixed, sizePx); out[o.k]=q2; fixed.push(q2); });
+  var px=w/vb.w;
+  var disp=out.map(function(q3,k){ var an=items[k].anchor; return Math.hypot(q3.x-an.x,q3.y-an.y)*px; })
+              .sort(function(a,b){ return a-b; });
+  return { pos:out, p90: disp.length ? disp[Math.floor(0.9*(disp.length-1))] : 0 };
+}
+
+/* 全国ボードは「日本地図のサイズで見る」盤面。持ち物が少なければ大きく、増えたら小さく出す。
+   1つの県に25枚あると、46pxのままでは群れが地図の大半を覆い、遠い県のマグネットが
+   群れに飲み込まれる（例: 栃木25枚＋鹿児島1枚で、鹿児島が栃木の中に埋もれた）。
+   なので「重心からのずれ（90%点）が盤面の幅の NAT_DRIFT 以内に収まる、いちばん大きい
+   サイズ」を二分探索で選ぶ。位置関係が保てることを優先し、読むのはズームに任せる
+   （遠景は色面とシルエット、近景で読む、の二層どおり）。 */
+var NAT_MIN=18;       /* これより小さいと色の点にしか見えない */
+var NAT_DRIFT=0.18;   /* 盤面の幅に対する、許せるずれ */
+function nationalLayout(host, items){
+  var w=host.clientWidth, max=rv('mag-size');
+  if(!w || !items.length) return null;     /* 非表示では大きさが決まらない。描画時に解く */
+  /* 持ち物と大きさが同じなら前回の結果を使う（調整パネルのスライダーで毎回解かない） */
+  var key=w+'|'+max+'|'+items.map(function(it){ return it.code+':'+it.muni; }).join(',');
+  if(host._layoutKey===key) return host._layout;
+  var limit=w*NAT_DRIFT, best=null;
+  var top=layoutAt(host, items, max);
+  if(top.p90<=limit){ best={size:max, pos:top.pos}; }
+  else{
+    var lo=NAT_MIN, hi=max;
+    for(var k=0;k<7;k++){
+      var mid=(lo+hi)/2, r=layoutAt(host, items, mid);
+      if(r.p90<=limit){ best={size:mid, pos:r.pos}; lo=mid; } else hi=mid;
+    }
+    if(!best){ var lo2=layoutAt(host, items, NAT_MIN); best={size:NAT_MIN, pos:lo2.pos}; }
+  }
+  best.size=Math.round(best.size*10)/10;
+  host._layoutKey=key; host._layout=best;
+  return best;
+}
+
 function renderJapan(){
   buildBoard(natural, JP.prefs, VB_JP);
   natural._svg.querySelectorAll('.land').forEach(function(el){
     if(Object.keys(st.placed[el.dataset.code]||{}).length) el.classList.add('has');
   });
-  /* 位置未定の代表は、ここで重心から重なりを解いて確定させる。
-     県の重心にそのまま置くと関東が団子になる。順序はコード順で固定し、結果を再現可能にする。 */
-  var codes=Object.keys(st.rep).sort(), taken=[], dirty=false;
-  codes.forEach(function(c){ if(st.npos[c]) taken.push(st.npos[c]); });
-  codes.forEach(function(code){
-    var m=magById(st.rep[code]); if(!m) return;
-    if(!st.npos[code]){
-      st.npos[code]=freeSpot(natural, {x:PREF_PATH[code].cx, y:PREF_PATH[code].cy}, taken);
-      taken.push(st.npos[code]); dirty=true;
-    }
-    natural._layer.appendChild(pinEl(natural, m, st.npos[code], 'n:'+code));
+  var items=nationalItems(), lay=nationalLayout(natural, items);
+  natural._magPx = lay ? lay.size : rv('mag-size');
+  items.forEach(function(it, k){
+    var pin=pinEl(natural, magById(it.magId), lay ? lay.pos[k] : it.anchor, 'n:'+it.code+':'+it.muni, natural._magPx);
+    pin.dataset.code=it.code;
+    natural._layer.appendChild(pin);
   });
-  if(dirty) save();
+  zoomApply(natural);   /* 大きさが変わると寄れる上限も変わるので、倍率を合わせ直す */
   updateLOD(natural);   /* ピンを足した後に解像度を合わせる */
-  document.getElementById('cPref').textContent=Object.keys(st.rep).length;
+  document.getElementById('cPref').textContent=prefCount();
 }
 
 /* ============ 県ボード ============ */
@@ -804,7 +938,7 @@ function renderTray(){
   document.getElementById('traylbl').textContent = curPref
     ? PREF_NAME[curPref]+'のマグネット — 地図の好きな位置にドラッグ'
     : '県をタップするとマグネットが出ます';
-  if(!curPref){ row.innerHTML='<div class="empty">日本地図の県をタップしてください。貼ったマグネットはドラッグで動かせます。</div>'; return; }
+  if(!curPref){ row.innerHTML='<div class="empty">日本地図の県をタップすると、その県のマグネットが出ます。</div>'; return; }
   var placed=st.placed[curPref]||{};
 
   var add=document.createElement('button');
@@ -906,48 +1040,56 @@ document.getElementById('trayrow').addEventListener('pointerdown', function(e){
   }});
 });
 
-/* ボード上のマグネットを動かす（全国／県 共通） */
-function bindBoardDrag(host, isNational){
-  host.addEventListener('pointerdown', function(e){
+/* 県ボードのマグネットを動かす。県ボードは「貼る」ための盤面で、位置は本人が決める。 */
+function bindPrefDrag(){
+  phost.addEventListener('pointerdown', function(e){
     if(zoomBusy()) return;              /* 2本指で触っている間はマグネットを掴まない */
     var pin=e.target.closest('.pin'); if(!pin) return;
     e.preventDefault(); e.stopPropagation();
-    var key=pin.dataset.key, kind=key.slice(0,1), id=key.slice(2);
-    var magId = isNational ? st.rep[id] : (st.placed[curPref]||{})[id];
-    var m=magById(magId); if(!m) return;
+    var id=pin.dataset.key.slice(2);
+    var m=magById((st.placed[curPref]||{})[id]); if(!m) return;
     pin.style.visibility='hidden';
     startDrag(e, {
-      host:host, mag:m, prefCode: isNational ? id : curPref,
+      host:phost, mag:m, prefCode:curPref,
       restore:function(){ pin.style.visibility=''; },   /* ピンチに割り込まれたときに戻す */
-      onTap:function(){
-        pin.style.visibility='';
-        /* 全国ボードで貼ってあるマグネットをタップ＝そのマグネットに寄る操作。鑑賞寄り。
-           県の領域をタップして降りる 'pref' とは動機が違うので kind を分ける。
-           ピンチズームを入れたら 'zoom' を同じ系列に足す（store.js の recordLook）。 */
-        if(isNational){ window.WMStore.recordLook('mag'); openPref(id); }
-      },
+      onTap:function(){ pin.style.visibility=''; },
       commit:function(pos){
-        if(isNational){ st.npos[id]=freeSpot(host,pos,others(host,'n:'+id)); save(); renderJapan(); }
-        else{ st.ppos[curPref]=st.ppos[curPref]||{}; st.ppos[curPref][id]=freeSpot(host,pos,others(host,'p:'+id)); save(); openPref(curPref); }
-        clack();
+        st.ppos[curPref]=st.ppos[curPref]||{};
+        st.ppos[curPref][id]=freeSpot(phost,pos,others(phost,'p:'+id));
+        save(); openPref(curPref); clack();
       }
     });
   });
 }
+/* 全国ボードのマグネットは動かせない（位置は自動で決まる）。タップでその県のボードへ降りる。
+   寄っているときに指で送る操作はズーム側が拾うので、ここでは「動かずに離した」だけを見る。 */
+function bindNationalTap(){
+  var down=null;
+  natural.addEventListener('pointerdown', function(e){
+    /* 2本目以降が来たらタップにしない（ピンチの片方の指で県が開かないように） */
+    if(Object.keys(zoomPts).length>1){ down=null; return; }
+    var pin=e.target.closest('.pin');
+    if(!pin){ down=null; return; }
+    e.preventDefault();                 /* 画像のネイティブなドラッグを抑える */
+    down={x:e.clientX, y:e.clientY, id:e.pointerId, code:pin.dataset.code};
+  });
+  window.addEventListener('pointerup', function(e){
+    if(!down || e.pointerId!==down.id) return;
+    var d=down; down=null;
+    if(Math.hypot(e.clientX-d.x, e.clientY-d.y) > TAP_SLOP) return;   /* 送りだった */
+    /* マグネットをタップ＝そのマグネットに寄る操作。県の領域をタップする 'pref' とは
+       動機が違うので kind を分けて数える。 */
+    window.WMStore.recordLook('mag');
+    openPref(d.code);
+  });
+  window.addEventListener('pointercancel', function(){ down=null; });
+}
 function others(host, skipKey){
-  var out=[];
-  if(host===natural){
-    Object.keys(st.rep).forEach(function(c){
-      if('n:'+c===skipKey) return;
-      out.push(st.npos[c] || {x:PREF_PATH[c].cx, y:PREF_PATH[c].cy});
-    });
-  }else{
-    var pos=st.ppos[curPref]||{};
-    Object.keys(st.placed[curPref]||{}).forEach(function(nm){
-      if('p:'+nm===skipKey) return;
-      if(pos[nm]) out.push(pos[nm]);
-    });
-  }
+  var out=[], pos=st.ppos[curPref]||{};
+  Object.keys(st.placed[curPref]||{}).forEach(function(nm){
+    if('p:'+nm===skipKey) return;
+    if(pos[nm]) out.push(pos[nm]);
+  });
   return out;
 }
 
@@ -960,9 +1102,9 @@ function placeMuni(nm, magId, pos){
   if(isNew) st.lastPlaced=Date.now();
   st.placed[c][nm]=magId;
   st.ppos[c][nm]=freeSpot(phost, pos, others(phost,'p:'+nm));
-  if(!st.rep[c]) st.rep[c]=magId;   /* 最初の1枚がその県の代表になる。位置は renderJapan で決める */
+
   save(); openPref(c);
-  document.getElementById('cPref').textContent=Object.keys(st.rep).length;
+  document.getElementById('cPref').textContent=prefCount();
   var pin=phost._layer.querySelector('.pin[data-key="p:'+nm+'"] .mag');
   if(pin && isNew) pin.classList.add('placing');
   clack();
@@ -1153,8 +1295,8 @@ natural.addEventListener('click', function(e){
   if(best && bd < px2vb(60)) go(best.code);
 });
 
-bindBoardDrag(natural, true);
-bindBoardDrag(phost, false);
+bindPrefDrag();
+bindNationalTap();
 /* ズームは host の親（.bview）に張る。buildBoard は何度も呼ばれるので、ここで1回だけ。 */
 bindZoom(natural);
 bindZoom(phost);
