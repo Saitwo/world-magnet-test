@@ -3,7 +3,8 @@
 // 役割はこれだけ:
 //   - 状態（どこを解錠したか・何を貼ったか）を localStorage に入れる/出す
 //   - 画像（実物マグネットの写真）を IndexedDB に入れる/出す（localStorage は 5MB 上限に当たる）
-//   - 画像を保存する前に縮小・圧縮する（長辺 512px / JPEG 品質 0.8）
+//   - 画像を保存する前に縮小・圧縮する（ローカル保存は長辺 1,024px）
+//   - 鑑賞操作（拡大して1枚を見る）の回数を localStorage に記録する
 //
 // ここに UI もボードの見た目も入れない。
 //
@@ -23,17 +24,25 @@
   var STATE_KEY = PREFIX + "state_v1"; // 状態本体
   var LAUNCH_KEY = PREFIX + "launches_v1"; // 起動タイムスタンプ（通過条件②の実測用）
   var LAUNCH_MAX = 500;
+  var LOOK_KEY = PREFIX + "looks_v1";  // 鑑賞操作の記録（通過条件②を起動回数より鋭く測る）
+  var LOOK_MAX = 1000;
 
   var DB_NAME = PREFIX + "images";
   var DB_VER = 1;
   var STORE_IMAGES = "images";
 
-  // 画像の既定。docs/04-decisions.md と issue #1 で決まっている配信解像度。
-  var IMAGE_DEFAULTS = { maxEdge: 512, quality: 0.8, type: "image/jpeg" };
+  // 画像の既定 = ローカル保存の解像度。
+  // 512px は「配信時」の規則（第三者著作物を他人に見せる際の権利上の措置）であって、
+  // 自分の端末で自分の写真を見るだけのローカル保存には適用しない。
+  // 詳細ビューは約400 CSS px を3倍密度で描くため 1,200 device px が要り、512px では引き伸ばしになる。
+  // 2026-09-11 の決定。サーバー配信を入れるフェーズ1が、SERVE_MAX_EDGE を適用し直すゲート。
+  var IMAGE_DEFAULTS = { maxEdge: 1024, quality: 0.8, type: "image/jpeg" };
+  var SERVE_MAX_EDGE = 512;            // 他人に配信するときの上限。フェーズ0では未使用。
 
   // ---- 環境判定 ------------------------------------------------------------
   var memState = null;      // localStorage が使えないときの逃げ場
   var memLaunches = null;
+  var memLooks = null;
   var memImages = null;     // IndexedDB が使えないときの逃げ場（リロードで消える）
   var lsOK = null;
   var idbOK = null;
@@ -150,6 +159,49 @@
   function clearLaunches() {
     memLaunches = null;
     return rawDel(LAUNCH_KEY);
+  }
+
+  // ---- 鑑賞操作 -------------------------------------------------------------
+  // 通過条件②は「何も増えない7日間で何回開いたか」を起動回数で測っているが、起動は
+  // 「開いただけ」でも記録される。1枚に寄って見た回数のほうが鑑賞の定着の直接指標になる。
+  // kind は寄り方の種類（"pref" = 県ボードに降りた / "zoom" = ピンチで拡大した など）。
+  // 記録は [{ t: 時刻, k: kind }]。
+  function getLooks() {
+    var s = rawGet(LOOK_KEY);
+    if (s == null) s = memLooks;
+    if (s == null) return [];
+    try {
+      var a = JSON.parse(s);
+      return Array.isArray(a) ? a : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function recordLook(kind, at) {
+    var a = getLooks();
+    a.push({ t: typeof at === "number" ? at : Date.now(), k: String(kind || "?") });
+    if (a.length > LOOK_MAX) a = a.slice(a.length - LOOK_MAX);
+    var payload;
+    try { payload = JSON.stringify(a); } catch (e) { return a; }
+    memLooks = payload;
+    rawSet(LOOK_KEY, payload);
+    return a;
+  }
+
+  // 種類ごとの回数。{ pref: 12, zoom: 40 } のように返す。
+  function lookCounts() {
+    var out = {};
+    getLooks().forEach(function (e) {
+      var k = e && e.k ? e.k : "?";
+      out[k] = (out[k] || 0) + 1;
+    });
+    return out;
+  }
+
+  function clearLooks() {
+    memLooks = null;
+    return rawDel(LOOK_KEY);
   }
 
   // ---- IndexedDB -----------------------------------------------------------
@@ -415,6 +467,7 @@
   function clearAll() {
     clearState();
     clearLaunches();
+    clearLooks();   // localStorage は接頭辞で消えるが、メモリ上の逃げ場は明示的に落とす
     if (hasLocalStorage()) {
       try {
         var keys = [];
@@ -433,7 +486,9 @@
     PREFIX: PREFIX,
     STATE_KEY: STATE_KEY,
     LAUNCH_KEY: LAUNCH_KEY,
+    LOOK_KEY: LOOK_KEY,
     IMAGE_DEFAULTS: IMAGE_DEFAULTS,
+    SERVE_MAX_EDGE: SERVE_MAX_EDGE,
 
     available: available,
     estimate: estimate,
@@ -446,6 +501,11 @@
     recordLaunch: recordLaunch,
     getLaunches: getLaunches,
     clearLaunches: clearLaunches,
+
+    recordLook: recordLook,
+    getLooks: getLooks,
+    lookCounts: lookCounts,
+    clearLooks: clearLooks,
 
     prepareImage: prepareImage,
     putImage: putImage,

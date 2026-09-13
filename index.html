@@ -49,7 +49,11 @@ h1{font-size:15px;font-weight:600;margin:0}
 .count b{font-size:17px;color:var(--ink);font-weight:600}
 
 /* ---------- ボード（白地図＋自由配置） ---------- */
-.board{position:relative;width:100%;touch-action:none}
+/* .bview が固定の窓で、.board が中で拡大縮小する。
+   物理では「近づく」で視距離を変えるので、アプリでは窓を固定して中身を拡大する。 */
+.bview{position:relative;overflow:hidden;touch-action:none;border-radius:10px}
+.board{position:relative;width:100%;touch-action:none;transform-origin:0 0}
+.board.zoomed{will-change:transform}
 .board svg{display:block;width:100%;height:auto}
 .board .land{fill:var(--land);stroke:var(--land-line);stroke-width:1.1;stroke-linejoin:round;cursor:pointer}
 .board .land.has{fill:#f7fbfd}
@@ -115,6 +119,17 @@ h1{font-size:15px;font-weight:600;margin:0}
 #drag{position:fixed;z-index:100;pointer-events:none;display:none;will-change:transform}
 #drag.on{display:block}
 
+/* ---------- ズーム操作（ピンチが使えない環境と、発見しやすさのため） ---------- */
+#zoomui{position:fixed;left:10px;bottom:104px;z-index:50;display:flex;align-items:center;gap:6px;
+  background:var(--panel);border:1px solid var(--rule);border-radius:20px;padding:5px 8px;
+  box-shadow:0 2px 10px rgba(0,0,0,.08)}
+#zoomui[hidden]{display:none}
+#zoomui button{font:inherit;font-size:13px;line-height:1;padding:6px 9px;border:1px solid var(--rule);
+  background:#fff;border-radius:14px;cursor:pointer;color:var(--ink)}
+#zoomui button:disabled{opacity:.35;cursor:default}
+#zoomui #zrst{font-size:11.5px}
+#zval{font-size:11.5px;color:var(--ink-2);font-variant-numeric:tabular-nums;min-width:34px;text-align:center}
+
 #tune{position:fixed;right:10px;bottom:104px;z-index:50}
 #tunebtn{font:inherit;font-size:12px;padding:7px 11px;border-radius:20px;border:1px solid var(--rule);background:#fff;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.08)}
 #tunebody{display:none;position:absolute;right:0;bottom:38px;width:250px;background:var(--panel);border:1px solid var(--rule);border-radius:12px;padding:12px;box-shadow:0 8px 30px rgba(0,0,0,.14);max-height:60vh;overflow:auto}
@@ -124,6 +139,10 @@ h1{font-size:15px;font-weight:600;margin:0}
 #tunebody .r input[type=range]{flex:1;min-width:0}
 #tunebody .r .v{flex:0 0 34px;text-align:right;font-variant-numeric:tabular-nums;color:var(--ink)}
 #tunebody .dump{width:100%;font:inherit;font-size:11.5px;margin-top:6px;padding:6px;border:1px solid var(--rule);background:#fff;border-radius:7px;cursor:pointer}
+#tunebody .stats{margin-top:10px;padding-top:9px;border-top:1px solid var(--rule)}
+#tunebody .sttl{font-size:11px;color:var(--ink-3);letter-spacing:.04em;margin-bottom:5px}
+#tunebody .srow2{display:flex;justify-content:space-between;gap:8px;font-size:11.5px;color:var(--ink-2);padding:2px 0}
+#tunebody .srow2 b{color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums;text-align:right}
 .hint{font-size:11.5px;color:var(--ink-3);margin:10px 0 0;line-height:1.65}
 @media (prefers-reduced-motion:reduce){.mag.placing{animation:none}}
 
@@ -185,7 +204,7 @@ h1{font-size:15px;font-weight:600;margin:0}
     <div class="count"><b id="cPref">0</b> / 47 都道府県</div>
   </header>
 
-  <div id="japan" class="board"></div>
+  <div class="bview"><div id="japan" class="board"></div></div>
 
   <div id="pref">
     <div class="pbar">
@@ -193,7 +212,7 @@ h1{font-size:15px;font-weight:600;margin:0}
       <div class="ptitle" id="ptitle"></div>
       <div class="pcount" id="pcount"></div>
     </div>
-    <div id="pboard" class="board"></div>
+    <div class="bview"><div id="pboard" class="board"></div></div>
   </div>
 
   <p class="hint" id="hint">県をタップすると、その県のボードが開きます。下のトレイからマグネットをドラッグして、地図の好きな位置に貼ってください。貼ったマグネットはあとから動かせます。マグネット同士は重なりません。</p>
@@ -228,6 +247,13 @@ h1{font-size:15px;font-weight:600;margin:0}
   </div>
 </div>
 <input type="file" id="cfile" accept="image/*" hidden>
+
+<div id="zoomui" hidden>
+  <button id="zout" aria-label="引く">−</button>
+  <span id="zval">1.0×</span>
+  <button id="zin" aria-label="寄る">＋</button>
+  <button id="zrst">等倍</button>
+</div>
 
 <div id="tune"><button id="tunebtn">調整</button><div id="tunebody"></div></div>
 
@@ -308,6 +334,7 @@ TUNE.forEach(function(t){ if(tv[t[0]]!=null) document.documentElement.style.setP
   });
   h+='<div class="r"><span>効果音</span><input type="checkbox" id="snd"'+(soundOn?' checked':'')+'></div>';
   h+='<button class="dump">今の値を出力</button>';
+  h+='<div class="stats" id="tstats"></div>';
   b.innerHTML=h;
   b.addEventListener('input',function(e){
     var k=e.target.getAttribute('data-k');
@@ -322,7 +349,53 @@ TUNE.forEach(function(t){ if(tv[t[0]]!=null) document.documentElement.style.setP
   };
 })();
 function saveTune(){ try{ localStorage.setItem('wm_tune_v1',JSON.stringify(tv)); }catch(e){} }
-document.getElementById('tunebtn').onclick=function(){ document.getElementById('tunebody').classList.toggle('open'); };
+/* ---- 計測の読み出し ----
+   harness.html はテストビルドに同梱しない（配布物にデバッグ画面を混ぜない）ので、
+   フェーズ0の通過条件をスマホ単体で読めるようにここに出す。
+   ① 取得の快感 = 何枚貼ったか
+   ② 鑑賞の定着 = 最後に貼ってから何日たって、その間に何回開き、何回寄ったか
+      起動は「開いただけ」でも増えるので、寄った回数のほうが鑑賞の直接指標になる。 */
+function renderStats(){
+  var el=document.getElementById('tstats'); if(!el) return;
+  var S=window.WMStore;
+  var launches=S.getLaunches(), looks=S.getLooks();
+  var since=st.lastPlaced||0;
+  var day=86400000, now=Date.now();
+  var placed=0, prefs=0;
+  Object.keys(st.placed||{}).forEach(function(c){
+    var n=Object.keys(st.placed[c]||{}).length;
+    if(n){ prefs++; placed+=n; }
+  });
+  function countAfter(list, get){ var n=0; list.forEach(function(x){ if(get(x)>since) n++; }); return n; }
+  var lAfter=countAfter(launches, function(t){ return t; });
+  var kinds={};
+  looks.forEach(function(e){ if(e.t>since) kinds[e.k]=(kinds[e.k]||0)+1; });
+  var days = since ? Math.floor((now-since)/day) : null;
+  var rows=[
+    ['貼った枚数', placed+' 枚 / '+prefs+' 県'],
+    ['最後に貼ってから', since ? (days+' 日') : '—'],
+    ['その後の起動', lAfter+' 回'],
+    ['その後に寄った', (kinds.zoom||0)+' 回'],
+    ['その後のマグネット/県タップ', (kinds.mag||0)+' / '+(kinds.pref||0)],
+    ['通算の起動', launches.length+' 回']
+  ];
+  el.innerHTML='<div class="sttl">フェーズ0の計測</div>'+rows.map(function(r){
+    return '<div class="srow2"><span>'+r[0]+'</span><b>'+r[1]+'</b></div>';
+  }).join('')+'<button class="dump" id="stdump">計測値をコピー</button>';
+  document.getElementById('stdump').onclick=function(){
+    var o={placed:placed, prefs:prefs, lastPlaced:since||null, daysSince:days,
+           launchesAfter:lAfter, looksAfter:kinds, launchesTotal:launches.length,
+           launches:launches, looks:looks};
+    var j=JSON.stringify(o);
+    document.getElementById('hint').textContent='計測値をコピーしました（'+j.length+'文字）';
+    try{ navigator.clipboard.writeText(j); }catch(e){}
+  };
+}
+document.getElementById('tunebtn').onclick=function(){
+  var b=document.getElementById('tunebody');
+  b.classList.toggle('open');
+  if(b.classList.contains('open')) renderStats();   /* 開いたときの値を出す */
+};
 
 /* ============ 効果音 ============ */
 var ac=null;
@@ -352,14 +425,17 @@ function autoMagnet(name){
     edge:'hsl('+(h%360)+' '+(52+(h>>3)%20)+'% '+Math.max(14,(38+(h>>7)%12)-20)+'%)',
     round:(h>>5)%3===0 };
 }
-var magCache={}, realURL={};    /* realURL[realId] = objectURL（起動時にまとめて読む） */
+var magCache={}, realURL={}, realThumb={};
+/* realURL[rid] = 実寸版(長辺1024)の objectURL、realThumb[rid] = 縮小版(長辺192)。
+   46pxで1,024pxを描かせると1枚あたり約100万画素を無駄にデコードするので、
+   遠景では縮小版を出し、寄ったら実寸版に差し替える（updateLOD）。 */
 function magById(id){
   if(magCache[id]) return magCache[id];
   if(id && id.indexOf('auto:')===0){ var m=autoMagnet(id.slice(5)); magCache[id]=m; return m; }
   if(id && id.indexOf('real:')===0){
     var rid=id.slice(5), r=st.real[rid];
     if(!r) return null;
-    var rm={ id:id, name:r.muni, real:true, shape:r.shape, url:realURL[rid]||null };
+    var rm={ id:id, name:r.muni, real:true, shape:r.shape, rid:rid, url:realURL[rid]||null, thumb:realThumb[rid]||null };
     magCache[id]=rm; return rm;
   }
   return null;
@@ -372,7 +448,12 @@ function magEl(m, px){
     d.className='mag photo';
     d.style.setProperty('--rot', ((hash(m.id)%1000/1000)*2-1)*rv('tilt')+'deg');
     var im=document.createElement('img');
-    if(m.url) im.src=m.url;
+    /* 既定は縮小版。寄ったら updateLOD が実寸版に差し替える。
+       古い記録には縮小版がないので、その場合は実寸版で出す。 */
+    var first = m.thumb || m.url;
+    if(m.rid) { im.dataset.rid=m.rid; im.dataset.lod = m.thumb ? 'thumb' : 'full'; }
+    if(first) im.src=first;
+    im.decoding='async';
     d.appendChild(im);
     return d;
   }
@@ -397,6 +478,194 @@ function bboxOf(d){
   return {x:x0,y:y0,w:x1-x0,h:y1-y0};
 }
 
+
+/* ============ ズーム ============
+   物理のマグネットには視距離が2つある。遠く（3〜4m相当＝46px）では色面とシルエットだけが
+   伝わり、近く（40cm相当＝約400px）で描き込みが読める。固定サイズでは1,741件と実物並みの
+   情報量を両立できないので、間を行き来できるようにする（04・2026-09-11）。
+
+   実装は host への CSS transform。この選び方の理由:
+     - toVB は _svg.getBoundingClientRect() を使うので transform が自動的に反映される
+     - freeSpot / radiusVB は clientWidth（レイアウト幅）で計算する。マグネットも一緒に
+       拡大される限り viewBox 単位の大きさは変わらないので、重なり判定に手を入れなくてよい
+     - pin は % 配置なので、位置の再計算が要らない
+   viewBox を書き換える方式だと上の3つすべてを直す必要がある。 */
+var ZMAX=10;        /* 46px × 10 = 460px。手に持つ距離（約400px）に届く */
+var ZOOM_LOOK=2;    /* これ以上寄ったら「1枚を見た」と数える */
+var LOD_Z=1.5;      /* これ以上寄ったら縮小版から実寸版に差し替える */
+
+function zs(host){
+  if(!host._zs) host._zs={z:1,tx:0,ty:0,looked:false};
+  return host._zs;
+}
+function activeBoard(){ return curPref ? phost : natural; }
+
+function zoomClamp(host){
+  var s=zs(host), W=host.clientWidth, H=host.clientHeight;
+  s.z=Math.max(1, Math.min(ZMAX, s.z));
+  if(!W||!H){ s.tx=0; s.ty=0; return; }
+  /* transform-origin が 0 0 なので中身は [tx, tx+z*W]。窓 [0,W] を覆う範囲に収める。 */
+  s.tx=Math.max(W-s.z*W, Math.min(0, s.tx));
+  s.ty=Math.max(H-s.z*H, Math.min(0, s.ty));
+}
+function zoomApply(host){
+  var s=zs(host);
+  zoomClamp(host);
+  if(s.z===1){
+    host.style.transform=''; host.classList.remove('zoomed');
+  }else{
+    host.style.transform='translate('+s.tx.toFixed(2)+'px,'+s.ty.toFixed(2)+'px) scale('+s.z.toFixed(4)+')';
+    host.classList.add('zoomed');
+  }
+  /* 寄ったら「見た」と数える。閾値を上下に跨ぐたびに数えないよう、1回の寄りで1回だけ。 */
+  if(s.z>=ZOOM_LOOK && !s.looked){ s.looked=true; window.WMStore.recordLook('zoom'); }
+  if(s.z<ZOOM_LOOK) s.looked=false;
+  updateLOD(host);
+  zoomUI();
+}
+/* 焦点 (fx,fy)（窓の左上を原点とする座標）を固定したまま倍率を nz にする */
+function zoomTo(host, nz, fx, fy){
+  var s=zs(host), before=s.z;
+  nz=Math.max(1, Math.min(ZMAX, nz));
+  if(nz===before) return;
+  var k=nz/before;
+  s.z=nz;
+  s.tx=fx-(fx-s.tx)*k;
+  s.ty=fy-(fy-s.ty)*k;
+  zoomApply(host);
+}
+function zoomReset(host){
+  var s=zs(host); s.z=1; s.tx=0; s.ty=0; zoomApply(host);
+}
+
+/* ---- 表示の切り替え（LOD） ----
+   実物の画像はローカルに長辺1,024pxで持つが、46pxで出すときに1,024pxを描かせると
+   1枚あたり約100万画素を無駄にデコードする。北海道は最大63枚並ぶので、縮小版を用意して
+   寄ったときだけ実寸版に差し替える。 */
+function updateLOD(host){
+  var want = zs(host).z >= LOD_Z ? 'full' : 'thumb';
+  host.querySelectorAll('img[data-rid]').forEach(function(im){
+    if(im.dataset.lod===want) return;
+    var rid=im.dataset.rid;
+    var url = want==='full' ? (realURL[rid]||realThumb[rid]) : (realThumb[rid]||realURL[rid]);
+    if(!url) return;
+    im.dataset.lod=want;
+    if(im.getAttribute('src')!==url) im.src=url;
+  });
+}
+
+function zoomUI(){
+  var host=activeBoard(), s=zs(host), ui=document.getElementById('zoomui');
+  ui.hidden=false;
+  document.getElementById('zval').textContent=s.z.toFixed(1)+'×';
+  document.getElementById('zin').disabled = s.z>=ZMAX-1e-6;
+  document.getElementById('zout').disabled = s.z<=1+1e-6;
+  document.getElementById('zrst').disabled = s.z<=1+1e-6;
+}
+(function(){
+  function step(mul){
+    var host=activeBoard(), W=host.clientWidth, H=host.clientHeight;
+    zoomTo(host, zs(host).z*mul, W/2, H/2);   /* ボタンは窓の中心を固定して寄る */
+  }
+  document.getElementById('zin').onclick=function(){ step(1.6); };
+  document.getElementById('zout').onclick=function(){ step(1/1.6); };
+  document.getElementById('zrst').onclick=function(){ zoomReset(activeBoard()); };
+})();
+
+/* ---- ジェスチャー ----
+   1本指でピンの上 → マグネットを動かす（既存）
+   1本指で地図の上、かつ寄っているとき → ボードを送る
+   1本指で地図の上、等倍のとき → タップで県を開く（既存）
+   2本指 → ピンチで寄る／引く。1本目がマグネットを掴んでいたら取り消す
+   ctrl+ホイール → トラックパッドのピンチ。デスクトップでの確認用でもある */
+var zoomPts={};        /* pointerId -> {x,y}。2本目が来たかを見るために全ボード共通で持つ */
+var pinchBase=null;
+var panBase=null;
+var eatClick=false;    /* 送った/寄った直後の click で県が開かないように */
+
+function zoomBusy(){ return Object.keys(zoomPts).length>=2 || !!pinchBase; }
+
+function bindZoom(host){
+  var view=host.parentNode;
+
+  function viewPt(e){
+    var r=view.getBoundingClientRect();
+    return {x:e.clientX-r.left, y:e.clientY-r.top};
+  }
+  function two(){
+    var k=Object.keys(zoomPts);
+    if(k.length<2) return null;
+    var a=zoomPts[k[0]], b=zoomPts[k[1]];
+    var r=view.getBoundingClientRect();
+    return { d:Math.hypot(a.x-b.x, a.y-b.y),
+             fx:(a.x+b.x)/2-r.left, fy:(a.y+b.y)/2-r.top };
+  }
+
+  /* capture で拾う。2本目が来たときに、ピンの pointerdown より先に割り込む必要がある。 */
+  view.addEventListener('pointerdown', function(e){
+    zoomPts[e.pointerId]={x:e.clientX,y:e.clientY};
+    var n=Object.keys(zoomPts).length;
+    if(n===2){
+      cancelDrag();                       /* 1本目がマグネットを掴んでいたら手を離す */
+      var t=two(); if(!t) return;
+      var s=zs(host);
+      pinchBase={d:t.d, z:s.z, tx:s.tx, ty:s.ty, fx:t.fx, fy:t.fy};
+      panBase=null;
+      e.preventDefault();
+    }else if(n===1 && zs(host).z>1 && !e.target.closest('.pin')){
+      var p=viewPt(e), s2=zs(host);
+      panBase={px:p.x, py:p.y, tx:s2.tx, ty:s2.ty, moved:false};
+    }
+  }, true);
+
+  view.addEventListener('pointermove', function(e){
+    if(!(e.pointerId in zoomPts)) return;
+    zoomPts[e.pointerId]={x:e.clientX,y:e.clientY};
+    if(pinchBase){
+      var t=two(); if(!t) return;
+      var s=zs(host);
+      var nz=Math.max(1, Math.min(ZMAX, pinchBase.z*(t.d/pinchBase.d)));
+      var k=nz/pinchBase.z;
+      s.z=nz;
+      /* 指の中心が動いた分は送りになる（ピンチしながら位置も直せる） */
+      s.tx=t.fx-(pinchBase.fx-pinchBase.tx)*k;
+      s.ty=t.fy-(pinchBase.fy-pinchBase.ty)*k;
+      zoomApply(host);
+      eatClick=true;
+      e.preventDefault();
+    }else if(panBase){
+      var p=viewPt(e), s3=zs(host);
+      var dx=p.x-panBase.px, dy=p.y-panBase.py;
+      if(!panBase.moved && Math.hypot(dx,dy)<=TAP_SLOP) return;   /* タップは送りにしない */
+      panBase.moved=true; eatClick=true;
+      s3.tx=panBase.tx+dx; s3.ty=panBase.ty+dy;
+      zoomApply(host);
+      e.preventDefault();
+    }
+  }, true);
+
+  function up(e){
+    delete zoomPts[e.pointerId];
+    if(Object.keys(zoomPts).length<2) pinchBase=null;
+    if(Object.keys(zoomPts).length===0) panBase=null;
+  }
+  /* window でも拾う。窓の外で指を離すと view にイベントが来ず、zoomPts に残骸が残って
+     zoomBusy() が真のままになり、マグネットを掴めなくなる。 */
+  view.addEventListener('pointerup', up, true);
+  view.addEventListener('pointercancel', up, true);
+  window.addEventListener('pointerup', up);
+  window.addEventListener('pointercancel', up);
+
+  /* トラックパッドのピンチは ctrl+wheel で来る。素のホイールはページのスクロールに残す。 */
+  view.addEventListener('wheel', function(e){
+    if(!e.ctrlKey) return;
+    e.preventDefault();
+    var r=view.getBoundingClientRect();
+    zoomTo(host, zs(host).z*Math.pow(0.995, e.deltaY), e.clientX-r.left, e.clientY-r.top);
+    eatClick=true;
+  }, {passive:false});
+}
+
 /* ボードを1つ作る。paths=[{code,d}] / vb=viewBox */
 function buildBoard(host, paths, vb){
   host.innerHTML='';
@@ -412,6 +681,13 @@ function buildBoard(host, paths, vb){
   var layer=document.createElement('div'); layer.className='mags';
   host.appendChild(layer);
   host._svg=svg; host._layer=layer; host._vb=vb; host._w=host.clientWidth||0;
+  /* 別の盤面に切り替わったときだけ等倍に戻す。同じ盤面の描き直し（貼った直後・動かした直後）
+     では倍率を保つ。貼るたびに引き戻されると、寄ったまま作業できない。
+     盤面の同一性は viewBox で見る（全国は固定、県ごとに違う）。
+     適用は svg と layer を足した後に行う。前だと clientHeight が 0 で送りが消える。 */
+  var key=vb.x+','+vb.y+','+vb.w+','+vb.h;
+  if(host._vbKey!==key){ host._vbKey=key; zoomReset(host); }
+  else zoomApply(host);
   return host;
 }
 
@@ -495,6 +771,7 @@ function renderJapan(){
     natural._layer.appendChild(pinEl(natural, m, st.npos[code], 'n:'+code));
   });
   if(dirty) save();
+  updateLOD(natural);   /* ピンを足した後に解像度を合わせる */
   document.getElementById('cPref').textContent=Object.keys(st.rep).length;
 }
 
@@ -512,6 +789,7 @@ function openPref(code){
     var m=magById(placed[nm]); if(!m) return;
     phost._layer.appendChild(pinEl(phost, m, pos[nm]||{x:phost._vb.x+phost._vb.w/2,y:phost._vb.y+phost._vb.h/2}, 'p:'+nm));
   });
+  updateLOD(phost);     /* ピンを足した後に解像度を合わせる */
   document.getElementById('pcount').textContent=Object.keys(placed).length+' / '+muniOf(code).length+' 市区町村';
   renderTray();
 }
@@ -557,9 +835,14 @@ function renderTray(){
 /* ============ ドラッグ（トレイから／ボード上の移動） ============ */
 var dragEl=document.getElementById('drag'), drag=null;
 
+var TAP_SLOP=6;   /* px。これ以下の移動はタップ扱い */
+/* ゴーストの大きさは、貼ってあるマグネットの見た目に合わせる（ボードが拡大していれば一緒に大きく） */
+function dragPx(host){ return rv('mag-size') * (host ? zs(host).z : 1); }
 function startDrag(e, opts){
   drag=opts; drag.moved=false;
-  var px=rv('mag-size');
+  /* つまんだ位置。ここからの距離でタップとドラッグを分ける。 */
+  drag.sx=e.clientX; drag.sy=e.clientY;
+  var px=dragPx(opts.host);
   dragEl.style.width=px+'px'; dragEl.innerHTML=''; dragEl.appendChild(magEl(opts.mag,px));
   dragEl.classList.add('on'); moveDrag(e);
   try{ e.target.setPointerCapture(e.pointerId); }catch(_){}
@@ -569,8 +852,12 @@ function startDrag(e, opts){
 }
 function moveDrag(e){
   if(!drag) return;
-  drag.moved=true;
-  var px=rv('mag-size');
+  /* startDrag が掴んだ直後に moveDrag を呼ぶ（ゴーストを指の下に出すため）ので、
+     ここで無条件に moved を立てると moved が必ず true になり、onTap が一度も発火しない。
+     結果、全国ボードでマグネットをタップしても県が開かず、その場に貼り直すだけになっていた。
+     しきい値を超えた移動だけをドラッグとみなす。 */
+  if(Math.hypot(e.clientX-drag.sx, e.clientY-drag.sy) > TAP_SLOP) drag.moved=true;
+  var px=dragPx(drag.host);
   dragEl.style.transform='translate('+(e.clientX-px/2)+'px,'+(e.clientY-px/2)+'px) scale(1.08)';
   var host=drag.host;
   host._svg.querySelectorAll('.land').forEach(function(el){ el.classList.remove('hot'); });
@@ -581,6 +868,19 @@ function moveDrag(e){
 function targetPath(host, cx, cy, prefCode){
   if(prefCode) return host._svg.querySelector('.land[data-code="'+prefCode+'"]');
   return host._svg.querySelector('.land');
+}
+/* ピンチに割り込まれたときなど、commit も onTap もせずに畳む */
+function cancelDrag(){
+  if(!drag) return;
+  window.removeEventListener('pointermove', moveDrag);
+  window.removeEventListener('pointerup', endDrag);
+  window.removeEventListener('pointercancel', endDrag);
+  dragEl.classList.remove('on');
+  if(drag.host && drag.host._svg){
+    drag.host._svg.querySelectorAll('.land').forEach(function(el){ el.classList.remove('hot'); });
+  }
+  if(drag.restore) drag.restore();
+  drag=null;
 }
 function endDrag(e){
   window.removeEventListener('pointermove', moveDrag);
@@ -609,6 +909,7 @@ document.getElementById('trayrow').addEventListener('pointerdown', function(e){
 /* ボード上のマグネットを動かす（全国／県 共通） */
 function bindBoardDrag(host, isNational){
   host.addEventListener('pointerdown', function(e){
+    if(zoomBusy()) return;              /* 2本指で触っている間はマグネットを掴まない */
     var pin=e.target.closest('.pin'); if(!pin) return;
     e.preventDefault(); e.stopPropagation();
     var key=pin.dataset.key, kind=key.slice(0,1), id=key.slice(2);
@@ -617,7 +918,14 @@ function bindBoardDrag(host, isNational){
     pin.style.visibility='hidden';
     startDrag(e, {
       host:host, mag:m, prefCode: isNational ? id : curPref,
-      onTap:function(){ pin.style.visibility=''; if(isNational) openPref(id); },
+      restore:function(){ pin.style.visibility=''; },   /* ピンチに割り込まれたときに戻す */
+      onTap:function(){
+        pin.style.visibility='';
+        /* 全国ボードで貼ってあるマグネットをタップ＝そのマグネットに寄る操作。鑑賞寄り。
+           県の領域をタップして降りる 'pref' とは動機が違うので kind を分ける。
+           ピンチズームを入れたら 'zoom' を同じ系列に足す（store.js の recordLook）。 */
+        if(isNational){ window.WMStore.recordLook('mag'); openPref(id); }
+      },
       commit:function(pos){
         if(isNational){ st.npos[id]=freeSpot(host,pos,others(host,'n:'+id)); save(); renderJapan(); }
         else{ st.ppos[curPref]=st.ppos[curPref]||{}; st.ppos[curPref][id]=freeSpot(host,pos,others(host,'p:'+id)); save(); openPref(curPref); }
@@ -647,6 +955,9 @@ function placeMuni(nm, magId, pos){
   var c=curPref;
   st.placed[c]=st.placed[c]||{}; st.ppos[c]=st.ppos[c]||{};
   var isNew=!st.placed[c][nm];
+  /* 新しく貼った時刻を残す。通過条件②「何も増えない7日間で何回開いたか」の起点。
+     これが無いと、あとから「いつ貼り終えたか」を復元できない。 */
+  if(isNew) st.lastPlaced=Date.now();
   st.placed[c][nm]=magId;
   st.ppos[c][nm]=freeSpot(phost, pos, others(phost,'p:'+nm));
   if(!st.rep[c]) st.rep[c]=magId;   /* 最初の1枚がその県の代表になる。位置は renderJapan で決める */
@@ -664,6 +975,11 @@ function redraw(){ if(curPref) openPref(curPref); else renderJapan(); }
    撮影ガイド枠＋手動マスク＋白背景のフラッドフィルで通す。 */
 var shot=document.getElementById('shot'), ccv=document.getElementById('ccv'), cring=document.getElementById('cring');
 var cimg=null, cz=1, cox=0, coy=0, cshape='round', CS=600;
+/* CS は操作とプレビューの座標空間。保存解像度は別に持つ。
+   詳細ビューは約400 CSS px を3倍密度で描くので 1,200 device px 相当が要る。
+   512px は「配信時」の規則で、ローカル保存には適用しない（04・2026-09-11）。 */
+var EXPORT=1024;
+var THUMB=192;   /* 遠景用の縮小版。46px を3倍密度で出しても足りる大きさ */
 ccv.width=CS; ccv.height=CS;
 
 function openShot(){ document.getElementById('cfile').click(); }
@@ -725,25 +1041,36 @@ function stripWhite(g, w, h, thr){
     if((d[o]+d[o+1]+d[o+2])/3 < thr) continue;
     d[o+3]=0;
     var x=i%w, y=(i/w)|0;
-    if(x>0) stack.push(i-1);
-    if(x<w-1) stack.push(i+1);
-    if(y>0) stack.push(i-w);
-    if(y<h-1) stack.push(i+w);
+    /* 積む前に seen を見る。1024²だと重複が積み上がってスタックが無駄に膨らむ。
+       塗り潰しの結果は変わらない（pop 側の判定はそのまま残している）。 */
+    if(x>0 && !seen[i-1]) stack.push(i-1);
+    if(x<w-1 && !seen[i+1]) stack.push(i+1);
+    if(y>0 && !seen[i-w]) stack.push(i-w);
+    if(y<h-1 && !seen[i+w]) stack.push(i+w);
   }
   g.putImageData(im,0,0);
 }
 
+/* 書き出しは CS ではなく S 座標で行う。cox/coy/cz は CS 空間の値なので k 倍して移す。
+   S は元写真の実解像度で上限を切る（ズームで寄っている分も割り引く）。
+   引き伸ばしても情報は増えないので、無駄にファイルを太らせない。 */
+function exportSize(){
+  var srcPx = Math.min(cimg.width, cimg.height) / cz;
+  return Math.max(CS, Math.min(EXPORT, Math.round(srcPx)));
+}
 function cropToBlob(){
-  var c=document.createElement('canvas'); c.width=CS; c.height=CS;
+  var S=exportSize(), k=S/CS;
+  var c=document.createElement('canvas'); c.width=S; c.height=S;
   var g=c.getContext('2d');
-  var sc=baseScale()*cz, w=cimg.width*sc, h=cimg.height*sc;
-  g.drawImage(cimg,(CS-w)/2+cox,(CS-h)/2+coy,w,h);
-  if(document.getElementById('cwhite').checked) stripWhite(g,CS,CS,232);
+  g.imageSmoothingQuality='high';
+  var sc=baseScale()*cz*k, w=cimg.width*sc, h=cimg.height*sc;
+  g.drawImage(cimg,(S-w)/2+cox*k,(S-h)/2+coy*k,w,h);
+  if(document.getElementById('cwhite').checked) stripWhite(g,S,S,232);
   g.globalCompositeOperation='destination-in';
   g.fillStyle='#000'; g.beginPath();
-  if(cshape==='round') g.arc(CS/2,CS/2,CS/2,0,Math.PI*2);
-  else if(cshape==='soft'){ var r=CS*0.20; g.moveTo(r,0); g.arcTo(CS,0,CS,CS,r); g.arcTo(CS,CS,0,CS,r); g.arcTo(0,CS,0,0,r); g.arcTo(0,0,CS,0,r); }
-  else g.rect(0,0,CS,CS);
+  if(cshape==='round') g.arc(S/2,S/2,S/2,0,Math.PI*2);
+  else if(cshape==='soft'){ var r=S*0.20; g.moveTo(r,0); g.arcTo(S,0,S,S,r); g.arcTo(S,S,0,S,r); g.arcTo(0,S,0,0,r); g.arcTo(0,0,S,0,r); }
+  else g.rect(0,0,S,S);
   g.fill();
   return new Promise(function(res){ c.toBlob(res,'image/webp',0.9); });
 }
@@ -770,13 +1097,23 @@ function saveReal(nm){
   var rid='r'+Date.now().toString(36)+Math.random().toString(36).slice(2,6);
   cropToBlob().then(function(blob){
     if(!blob) throw new Error('blob');
-    /* 長辺512・webp。透明を残したいので type を指定する（既定は JPEG） */
-    return window.WMStore.prepareImage(blob,{maxEdge:512,type:'image/webp',quality:0.85})
-      .then(function(b){ return window.WMStore.putImage('img:'+rid, b||blob); });
+    /* ローカル保存は長辺1,024・webp。透明を残したいので type を指定する（既定は JPEG）。
+       配信時の512px規則はサーバーを入れるフェーズ1で適用する（WMStore.SERVE_MAX_EDGE）。
+       あわせて縮小版(192px)も持つ。遠景の46px表示でこちらを使う（LOD）。 */
+    return Promise.all([
+      window.WMStore.prepareImage(blob,{maxEdge:EXPORT,type:'image/webp',quality:0.85})
+        .then(function(b){ return window.WMStore.putImage('img:'+rid, b||blob); }),
+      window.WMStore.prepareImage(blob,{maxEdge:THUMB,type:'image/webp',quality:0.85})
+        .then(function(b){ return b ? window.WMStore.putImage('thumb:'+rid, b) : false; })
+    ]);
   }).then(function(){
-    return window.WMStore.getImageURL('img:'+rid);
-  }).then(function(url){
-    realURL[rid]=url;
+    return Promise.all([
+      window.WMStore.getImageURL('img:'+rid),
+      window.WMStore.getImageURL('thumb:'+rid)
+    ]);
+  }).then(function(urls){
+    realURL[rid]=urls[0]; realThumb[rid]=urls[1];
+    var url=urls[0];
     st.real[rid]={pref:curPref, muni:nm, shape:cshape, at:Date.now()};
     save();
     shot.classList.remove('open');
@@ -793,6 +1130,14 @@ function saveReal(nm){
 natural.addEventListener('click', function(e){
   if(e.target.closest && e.target.closest('.pin')) return;   /* マグネットのタップは別処理 */
   var w=natural.clientWidth||natural._w; if(!w) return;
+  /* ボードを送った／寄った直後の click では県を開かない（指を滑らせただけなので） */
+  if(eatClick){ eatClick=false; return; }
+  /* 県に降りたら記録する。マグネットへ寄る 'mag' と違い、こちらは「その県に行く」移動で、
+     新しく貼るための操作が多い。動機が違うので kind を分けて数える。
+     openPref は placeMuni や redraw からも呼ばれるので、そちらでは数えない。
+     下は県が開く経路が3つあるうえ、どこにも当たらず何も開かない場合があるので、
+     実際に開くときだけ通る go() にまとめる。 */
+  var go = function(code){ window.WMStore.recordLook('pref'); openPref(code); };
   var px2vb=function(px){ return px/w*natural._vb.w; };
   var p=toVB(natural, e.clientX, e.clientY);
   var best=null, bd=1e9;
@@ -801,19 +1146,25 @@ natural.addEventListener('click', function(e){
     if(d<bd){ bd=d; best=q; }
   });
   /* 重心のすぐ近くを突いていたら、それが狙いとみなす（小さい県ほどこれで拾える） */
-  if(best && bd < px2vb(24)){ openPref(best.code); return; }
+  if(best && bd < px2vb(24)){ go(best.code); return; }
   var el = e.target.closest ? e.target.closest('.land') : null;
-  if(el && el.dataset.code){ openPref(el.dataset.code); return; }
+  if(el && el.dataset.code){ go(el.dataset.code); return; }
   /* 海の上でも、近ければいちばん近い県を開く */
-  if(best && bd < px2vb(60)) openPref(best.code);
+  if(best && bd < px2vb(60)) go(best.code);
 });
 
 bindBoardDrag(natural, true);
 bindBoardDrag(phost, false);
+/* ズームは host の親（.bview）に張る。buildBoard は何度も呼ばれるので、ここで1回だけ。 */
+bindZoom(natural);
+bindZoom(phost);
 
 /* 実物の画像URLを先に揃えてから描く。magEl は同期なので、後から差すと空になる。 */
 Promise.all(Object.keys(st.real).map(function(rid){
-  return window.WMStore.getImageURL('img:'+rid).then(function(u){ if(u) realURL[rid]=u; });
+  return Promise.all([
+    window.WMStore.getImageURL('img:'+rid).then(function(u){ if(u) realURL[rid]=u; }),
+    window.WMStore.getImageURL('thumb:'+rid).then(function(u){ if(u) realThumb[rid]=u; })
+  ]);
 })).catch(function(){}).then(function(){
   magCache={};
   renderJapan(); renderTray();
